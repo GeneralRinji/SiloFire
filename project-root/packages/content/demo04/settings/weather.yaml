@@ -1,0 +1,36 @@
+# demo04 per-project weather settings
+#
+# Shared authoritative weather lives here, with region/node assignment and opt-in passive visibility.
+
+patterns:
+  block_weather:
+    minutesPerStep: 1
+    steps:
+      - id: clear_soft
+        kind: clear
+        intensity: soft
+        statusText:
+          - The block sits under a clear sky.
+      - id: rain_light
+        kind: rain
+        intensity: light
+        statusText:
+          - A light rain traces the curb and storefront glass.
+      - id: overcast_still
+        kind: overcast
+        intensity: still
+        statusText:
+          - The rain has passed, leaving the block under a flat grey sky.
+
+assignments:
+  defaultPattern: block_weather
+  regions:
+    diorama_block: block_weather
+
+visibility:
+  defaultRecentLog: false
+  regions:
+    diorama_block: true
+  nodes:
+    building04_groundfloor: false
+    building04_upstairs: false

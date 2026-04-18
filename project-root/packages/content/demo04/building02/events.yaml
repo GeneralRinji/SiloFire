@@ -1,0 +1,84 @@
+# demo04 building02 event sketch
+#
+# A small regenerative loop: the wrapped mint comes back at dawn if someone took it.
+
+events:
+  refill_counter_mint_at_dawn:
+    trigger:
+      kind: enter
+      actor: player
+      nodeId: building02_groundfloor
+
+    when:
+      predicate: counter_mint_can_refill
+
+    actor:
+      - In the thin edge of dawn, a fresh wrapped mint has been set out on the counter again.
+
+    effects:
+      - set: [objects.building02_counter_mint.available, true]
+
+  inspect_sample_bowl_when_mint_available:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building02_groundfloor
+      poiId: sample_bowl
+
+    when:
+      predicate: counter_mint_available
+
+    actor:
+      - One wrapped mint waits in the bowl like the room is still practicing for customers.
+
+  inspect_sample_bowl_when_empty:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building02_groundfloor
+      poiId: sample_bowl
+
+    when:
+      predicate: counter_mint_missing
+
+    actor:
+      - The bowl is empty now, though it looks like someone still means to keep the gesture going.
+
+  take_counter_mint:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building02_groundfloor
+      choiceId: take_counter_mint
+
+    when:
+      predicate: counter_mint_available
+
+    offer:
+      label: Take Wrapped Mint
+      key: M
+
+    actor:
+      - You take the wrapped mint from the bowl.
+
+    private:
+      text:
+        - A small courtesy like this only works if someone keeps renewing it.
+
+    effects:
+      - set: [objects.building02_counter_mint.available, false]
+      - set: [objects.building02_counter_mint.last_taken_by, actor.id]
+      - set: [objects.building02_counter_mint.last_taken_phase, world.time.phase]
+
+  take_counter_mint_when_empty:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building02_groundfloor
+      choiceId: take_counter_mint
+
+    when:
+      predicate: counter_mint_missing
+
+    actor:
+      - There is nothing left in the bowl to take right now.

@@ -1,0 +1,202 @@
+Area / Gate / Path Fixture Ideas
+
+Purpose:
+This file is a planning scratchpad for content-graph fixtures.
+
+The goal is not to design the final world.
+
+The goal is to identify small authored topologies that are likely to shake bugs out of the current runtime.
+
+Important distinction:
+- supported current-runtime fixture ideas belong near the top
+- future or aspirational topology ideas belong lower down
+
+
+Current runtime notes
+
+1. There is no implemented `hidden` gate mode right now.
+2. There is no implemented `present` mode name right now.
+3. For a normal visible node, think `normal` or simply no passthrough flags.
+4. `billboard` is real.
+5. `passthrough`, `walkpassthrough`, and `runpassthrough` are real.
+
+
+Light guidelines for writing fixtures
+
+These are not hard rules.
+
+1. Most Paths should still behave like line segments with a gate on each end.
+2. Areas should be allowed to have multiple exits.
+3. Use very small fixtures first. Two to five files is usually enough.
+4. Use these fixtures to test routing and fallback behavior, not flavor writing.
+
+
+Supported current-runtime fixture ideas
+
+1. Minimal linear flow
+Test:
+Area -> passthrough gate -> visible path -> passthrough gate -> Area
+
+Expected result:
+Looks like the player moved from Area01 to Path01 to Area02, with the gates routing cleanly.
+
+Use case:
+Baseline proof that current passthrough gate behavior still works.
+
+Sketch:
+Area01(normal) <-> Gate01(passthrough) <-> Path01(normal) <-> Gate02(passthrough) <-> Area02(normal)
+
+
+2. Fully visible linear flow
+Test:
+Area -> visible gate -> visible path -> visible gate -> Area
+
+Expected result:
+Player should be able to stop on every node in sequence.
+
+Use case:
+Exercises the visible gate branch that is less covered than passthrough routing.
+
+Sketch:
+Area01(normal) <-> Gate01(normal) <-> Path01(normal) <-> Gate02(normal) <-> Area02(normal)
+
+
+3. Billboard gate next to an area
+Test:
+Area -> billboard gate
+
+Expected result:
+The gate should surface as readable threshold flavor rather than as a passthrough route.
+
+Use case:
+Good for things like a business front, locked shop, or descriptive doorway.
+
+Sketch:
+Area01(normal) <-> Gate01(billboard)
+
+
+4. Branching area
+Test:
+One Area has more than one valid exit.
+
+Expected result:
+Area navigation should render multiple exits cleanly and not assume a single linear route.
+
+Use case:
+This is likely the next real content shape after a simple hallway.
+
+Sketch:
+Area01(normal) <-> Gate01(passthrough) <-> Path01(normal) <-> Gate02(passthrough) <-> Area02(normal)
+Area01(normal) <-> Gate03(passthrough) <-> Path02(normal) <-> Gate04(passthrough) <-> Area03(normal)
+
+
+5. Mixed gate presentations in one area
+Test:
+One area exposes multiple gates of different kinds together.
+
+Expected result:
+Billboard, passthrough, and visible gate behavior should not trip over one another.
+
+Use case:
+This is a realistic production pattern.
+
+Sketch:
+Area01(normal) <-> Gate01(billboard)
+Area01(normal) <-> Gate02(passthrough) <-> Path01(normal) <-> Gate03(passthrough) <-> Area02(normal)
+Area01(normal) <-> Gate04(normal) <-> Path02(normal) <-> Gate05(normal) <-> Area03(normal)
+
+
+6. Dead-end path
+Test:
+A path exists, but one side does not resolve onward.
+
+Expected result:
+The runtime should fail safely rather than crash or produce impossible movement.
+
+Use case:
+Useful when content is partially authored.
+
+Sketch:
+Area01(normal) <-> Gate01(passthrough) <-> Path01(normal) -> missing destination
+
+
+7. Missing target id
+Test:
+An area exit, gate endpoint, or path endpoint points to an id that does not exist.
+
+Expected result:
+The page should still render.
+The broken route should fail safely.
+
+Use case:
+Authors will absolutely do this by accident.
+
+
+8. One-way path
+Test:
+A path is authored forward-only or backward-only.
+
+Expected result:
+Direction handling should remain coherent.
+
+Use case:
+Good pressure test for path direction resolution.
+
+
+9. One-way gate
+Test:
+A gate is authored forward-only or backward-only.
+
+Expected result:
+Direction handling should remain coherent for both visible and passthrough thresholds.
+
+Use case:
+This keeps one-way threshold behavior separate from any door-specific fiction.
+
+
+10. Alias-heavy references
+Test:
+Some files use full ids with `_{guid}` and others use readable canonical ids.
+
+Expected result:
+Runtime alias tolerance should still resolve movement correctly.
+
+Use case:
+Protects against future drift in permissive reference behavior.
+
+
+Future / aspirational topology ideas
+
+These are useful later, but they should not drive the next few fixtures.
+
+
+1. Hidden gates
+This is a design idea, not current implemented behavior.
+
+
+2. Large grids
+Examples:
+- 2 x 2 grid
+- 2 x 2 grid with diagonals
+- 3 x 3 full mesh
+
+These are useful later as scale and authoring-friction tests.
+
+Right now they are probably too expensive compared with the smaller edge cases above.
+
+
+3. Procedural or ray-based topography
+Interesting later.
+
+Not useful as a driver for the current fixture set yet.
+
+
+Suggested next real fixture folders
+
+If this turns into actual content folders, the highest-value order is probably:
+
+1. test02_branching_area
+2. test03_visible_gate
+3. test04_missing_target
+4. test05_dead_end_path
+5. test06_mixed_gate_modes

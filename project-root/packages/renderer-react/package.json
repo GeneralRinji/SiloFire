@@ -1,0 +1,20 @@
+{
+  "name": "@silofire/renderer-react",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/index.test.tsx"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}

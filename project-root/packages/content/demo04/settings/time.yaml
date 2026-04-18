@@ -1,0 +1,23 @@
+# demo04 per-project time settings
+#
+# This is project-scoped configuration, not event logic.
+
+calendars:
+  diorama_block:
+    preset: earth_like_4phase
+    minutesPerPhase: 1
+
+  dawn_archive:
+    preset: custom
+    phases:
+      - id: silver_dawn
+        durationMinutes: 1
+      - id: long_glow
+        durationMinutes: 1
+      - id: blue_dark
+        durationMinutes: 1
+
+assignments:
+  defaultCalendar: diorama_block
+  regions:
+    diorama_block: diorama_block

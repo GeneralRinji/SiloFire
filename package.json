@@ -1,0 +1,12 @@
+{
+  "name": "silofire-root",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "npm --prefix ./project-root/apps/web run dev --",
+    "build": "npm --prefix ./project-root/apps/web run build",
+    "preview": "npm --prefix ./project-root/apps/web run preview",
+    "test": "npm --prefix ./project-root/apps/web run test",
+    "typecheck": "npm --prefix ./project-root/apps/web run typecheck"
+  }
+}

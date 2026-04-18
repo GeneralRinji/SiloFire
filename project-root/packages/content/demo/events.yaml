@@ -1,0 +1,21 @@
+# demo event sketch
+#
+# Endings can offer restart or return actions directly from content.
+
+events:
+  restart_after_bad_ending:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: game_over_bad
+      choiceId: restart
+
+    offer:
+      label: Restart
+      key: R
+
+    actor:
+      - You pull the walk back to the harbor entrance and start again.
+
+    effects:
+      - reset_run: [title_screen]

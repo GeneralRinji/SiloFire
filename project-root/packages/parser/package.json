@@ -1,0 +1,13 @@
+{
+  "name": "@silofire/parser",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/shared.test.ts src/path.test.ts src/area.test.ts src/gate.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

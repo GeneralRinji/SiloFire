@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node", "react", "react-dom"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "../projection/src/**/*.ts"
+  ],
+  "exclude": [
+    "../projection/src/**/*.test.ts"
+  ]
+}

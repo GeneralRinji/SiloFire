@@ -1,0 +1,24 @@
+{
+  "name": "@silofire/web",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --import tsx --test src/contentRuntime.test.ts src/saveState.test.ts src/runtimeClock.test.ts src/runtimeAmbient.test.ts src/runtimeWeather.test.ts src/projectSession.test.ts src/phaseEntry.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}

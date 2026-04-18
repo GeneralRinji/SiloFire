@@ -1,0 +1,70 @@
+# demo04 world and shared-state sketch
+#
+# This file seeds the runtime session state for demo04 sidecar behavior.
+
+world:
+  time:
+    mode: ambient
+    phase: day
+    cycle:
+      - day
+      - dusk
+      - night
+      - dawn
+
+  weather:
+    kind: clear
+    intensity: soft
+    patternId: block_weather
+    stepId: clear_soft
+
+  business:
+    building02:
+      open: true
+      closesAtPhase: night
+
+nodes:
+  building01_groundfloor:
+    light: on
+
+objects:
+  night_light:
+    on: false
+
+  bedside_lamp:
+    on: true
+
+  vase_01:
+    aligned: false
+
+  building02_counter_mint:
+    available: true
+
+npcs:
+  resident_01:
+    location: building04_groundfloor
+    activeMode: settled
+
+  walker_01:
+    location: sidewalk_north
+    routeIndex: 0
+    paused: false
+
+story:
+  resident_01:
+    dialog_topic: idle
+    heard_sleep_hint: false
+
+player:
+  active:
+    id: player_01
+
+players:
+  player_01:
+    name: Rowan Vale
+    pronouns:
+      subject: they
+      object: them
+      possessive: their
+    perception:
+      recognizes_cheap_imitation: true

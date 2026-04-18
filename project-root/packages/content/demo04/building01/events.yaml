@@ -1,0 +1,145 @@
+# demo04 building01 event sketch
+#
+# One example event using actor, private, and witnesses output.
+# Actor text is what the acting player sees.
+# Private text is only for that actor.
+# Witness text is what other observers can see.
+
+events:
+  leave_building01_with_vase_still_misaligned:
+    trigger:
+      kind: exit
+      actor: player
+      nodeId: building01_groundfloor
+      exitId: building01_to_north
+
+    when:
+      predicate: vase_is_misaligned
+
+    actor:
+      - You leave the room with the vase still a little off, and the imbalance follows you out.
+
+    private:
+      text:
+        - You could have fixed it. You chose not to.
+
+    witnesses:
+      text:
+        - '{actor.name|Someone} heads out without touching the vase, though their attention lingers on it for a second.'
+
+    effects:
+      - set: [objects.vase_01.left_misaligned, true]
+
+  enter_building01_after_straightening_vase:
+    trigger:
+      kind: enter
+      actor: player
+      nodeId: building01_groundfloor
+
+    when:
+      predicate: vase_is_aligned
+
+    actor:
+      - Coming back in, the room lands more cleanly. The vase is still where you set it.
+
+    private:
+      text:
+        - Small corrections can make a place feel less accidental.
+
+    witnesses:
+      text:
+        - '{actor.name|Someone} steps back in and immediately glances toward the vase.'
+
+  inspect_vase_01_aligned:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building01_groundfloor
+      poiId: vase_01
+
+    when:
+      predicate: vase_is_aligned
+
+    actor:
+      - You lift the vase again. The chipped side is tucked neatly toward the wall now.
+
+    private:
+      text:
+        - Better. Not fixed, just less insistent.
+
+    witnesses:
+      text:
+        - '{actor.name|Someone} checks the vase again, apparently satisfied with its angle this time.'
+
+    effects:
+      - set: [objects.vase_01.last_inspected_by, actor.id]
+
+  inspect_vase_01:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building01_groundfloor
+      poiId: vase_01
+
+    when:
+      predicate: resident_is_home
+
+    actor:
+      - You take the vase and turn it over in your hands.
+
+    private:
+      when:
+        predicate: actor_recognizes_cheap_imitation
+      text:
+        - Another cheap clay imitation. There are too many of those on this block. *Sigh*.
+
+    witnesses:
+      text:
+        - '{actor.name|Someone} takes the vase and turns it over in {actor.pronouns.possessive|their} hands.'
+        - '{actor.name|Someone} sighs after a brief inspection.'
+
+    effects:
+      - set: [objects.vase_01.last_inspected_by, actor.id]
+      - set: [objects.vase_01.last_read_quality, imitation]
+
+  straighten_vase_01:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building01_groundfloor
+      choiceId: straighten_vase
+
+    when:
+      predicate: vase_is_misaligned
+
+    actor:
+      - You rotate the vase until the chipped side faces the wall.
+
+    private:
+      text:
+        - It changes nothing important, but the room looks slightly less careless.
+
+    witnesses:
+      text:
+        - '{actor.name|Someone} straightens the vase with a small, exact motion.'
+
+    effects:
+      - set: [objects.vase_01.aligned, true]
+      - set: [objects.vase_01.last_aligned_by, actor.id]
+
+  straighten_vase_01_already_aligned:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building01_groundfloor
+      choiceId: straighten_vase
+
+    when:
+      predicate: vase_is_aligned
+
+    actor:
+      - The vase is already set the way you wanted it.
+
+    private:
+      text:
+        - You leave it alone.

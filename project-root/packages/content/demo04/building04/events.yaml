@@ -1,0 +1,407 @@
+# demo04 building04 event sketch
+#
+# Upstairs bedroom details should shift with the current phase.
+
+events:
+  enter_building04_groundfloor_at_dawn:
+    trigger:
+      kind: enter
+      actor: player
+      nodeId: building04_groundfloor
+
+    when:
+      predicate: building04_morning_paper_is_here
+
+    actor:
+      - A folded morning paper has been slipped onto the doormat inside the door.
+
+  talk_to_building04_resident:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_groundfloor
+      choiceId: talk_to_resident
+
+    when:
+      predicate: resident_can_start_dialogue
+
+    offer:
+      label: Talk To Resident
+      key: T
+
+    actor:
+      - You ask whether they are waiting up for someone.
+      - The resident glances toward the stairwell. "Maybe. Maybe I am just making sure the place settles properly before anyone tries to sleep in it."
+
+    effects:
+      - set: [story.resident_01.dialog_topic, greeting]
+
+  ask_resident_about_building04:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_groundfloor
+      choiceId: ask_about_building04
+
+    when:
+      predicate: resident_can_ask_about_building
+
+    offer:
+      label: Ask About The Building
+      key: B
+
+    actor:
+      - You ask if the building always feels this hushed.
+      - "Only after dark," they say. "In daylight it is just another room. At night it starts telling the truth about what it is for."
+
+    effects:
+      - set: [story.resident_01.dialog_topic, room_advice]
+
+  ask_resident_about_sleep_setup:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_groundfloor
+      choiceId: ask_about_sleep_setup
+
+    when:
+      predicate: resident_can_ask_about_sleep
+
+    offer:
+      label: Ask How They Would Settle In For The Night
+      key: S
+
+    actor:
+      - You ask what makes the upstairs room feel ready for sleep.
+      - They rest a hand on the banister. "You want enough comfort to keep the room kind, not so much light that it stays awake with you."
+
+    effects:
+      - set: [story.resident_01.dialog_topic, sleep_setup]
+
+  admit_dislike_of_darkness:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_groundfloor
+      choiceId: admit_dislike_of_darkness
+
+    when:
+      predicate: resident_can_admit_dislike_dark
+
+    offer:
+      label: Admit You Do Not Like Sleeping In The Dark
+      key: D
+
+    actor:
+      - You admit that total darkness can make it hard to settle.
+      - That gets a sympathetic look. "Then use the little night light. It is there for exactly that reason."
+
+    private:
+      text:
+        - That sounds less like decoration and more like instruction.
+
+    effects:
+      - set: [story.resident_01.dialog_topic, darkness]
+      - set: [story.resident_01.heard_sleep_hint, true]
+
+  ask_why_not_use_bedside_lamp:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_groundfloor
+      choiceId: ask_about_bedside_lamp
+
+    when:
+      predicate: resident_can_ask_about_lamp
+
+    offer:
+      label: Ask Why Not Just Use The Bedside Lamp
+      key: L
+
+    actor:
+      - You ask why the bedside lamp would not do the same job.
+      - They shake their head. "The bedside lamp is too awake. If that one is on, the room never quite lets go of the day."
+      - "Night light on. Bedside lamp off. That is the shape of a room that will let you sleep."
+
+    private:
+      text:
+        - There it is, nearly plainspoken.
+
+    effects:
+      - set: [story.resident_01.dialog_topic, lamp_hint]
+      - set: [story.resident_01.heard_sleep_hint, true]
+
+  press_resident_for_final_hint:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_groundfloor
+      choiceId: ask_if_that_really_matters
+
+    when:
+      predicate: resident_can_press_final_hint
+
+    offer:
+      label: Ask If That Really Makes Enough Difference
+      key: R
+
+    actor:
+      - You ask whether that small distinction really matters.
+      - "Enough light to keep the dark from crowding you. Not enough light to keep arguing with your body," they say. "That difference matters."
+
+    effects:
+      - set: [story.resident_01.dialog_topic, final_hint]
+      - set: [story.resident_01.heard_sleep_hint, true]
+
+  end_conversation_with_resident:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_groundfloor
+      choiceId: end_resident_conversation
+
+    when:
+      predicate: resident_can_end_dialogue
+
+    offer:
+      label: Thank Them And Step Away
+      key: W
+
+    actor:
+      - You nod like you understand the upstairs room better than you did a minute ago.
+
+    effects:
+      - set: [story.resident_01.dialog_topic, idle]
+
+  inspect_building04_doormat_with_morning_paper:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building04_groundfloor
+      poiId: doormat
+
+    when:
+      predicate: building04_morning_paper_is_here
+
+    actor:
+      - A morning paper rests on the mat, folded into a neat rectangle with the ink smell still fresh.
+
+  inspect_building04_doormat_after_morning:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building04_groundfloor
+      poiId: doormat
+
+    when:
+      predicate: building04_morning_paper_is_gone
+
+    actor:
+      - The doormat is bare now, with only a faint curl at one corner where a paper must have sat earlier.
+
+  read_building04_morning_paper:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_groundfloor
+      choiceId: read_morning_paper
+
+    when:
+      predicate: building04_morning_paper_is_here
+
+    offer:
+      label: Read Morning Paper
+      key: M
+
+    actor:
+      - You open the paper and find the usual local blend of civic optimism, small disappointments, and weather that sounds more definite than the sky ever does.
+
+    private:
+      text:
+        - In a place this compact, even the headlines feel like part of the set dressing for a day that has not fully started yet.
+
+  turn_night_light_on:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_upstairs
+      choiceId: turn_night_light_on
+
+    when:
+      predicate: night_light_is_off
+
+    offer:
+      label: Turn Night Light On
+      key: N
+
+    actor:
+      - You click the little night light on.
+
+    effects:
+      - set: [objects.night_light.on, true]
+
+  turn_night_light_off:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_upstairs
+      choiceId: turn_night_light_off
+
+    when:
+      predicate: night_light_is_on
+
+    offer:
+      label: Turn Night Light Off
+      key: N
+
+    actor:
+      - You switch the night light off again.
+
+    effects:
+      - set: [objects.night_light.on, false]
+
+  turn_bedside_lamp_on:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_upstairs
+      choiceId: turn_bedside_lamp_on
+
+    when:
+      predicate: bedside_lamp_is_off
+
+    offer:
+      label: Turn Bedside Lamp On
+      key: L
+
+    actor:
+      - You turn the bedside lamp on.
+
+    effects:
+      - set: [objects.bedside_lamp.on, true]
+
+  turn_bedside_lamp_off:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_upstairs
+      choiceId: turn_bedside_lamp_off
+
+    when:
+      predicate: bedside_lamp_is_on
+
+    offer:
+      label: Turn Bedside Lamp Off
+      key: L
+
+    actor:
+      - You turn the bedside lamp off.
+
+    effects:
+      - set: [objects.bedside_lamp.on, false]
+
+  inspect_night_light_when_on:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building04_upstairs
+      poiId: night_light
+
+    when:
+      predicate: night_light_is_on
+
+    actor:
+      - The night light leaves a soft, low glow at floor level, enough to make the room feel guided instead of dark.
+
+  inspect_night_light_when_off:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building04_upstairs
+      poiId: night_light
+
+    when:
+      predicate: night_light_is_off
+
+    actor:
+      - The night light is off, just a pale plastic shape waiting near the baseboard.
+
+  inspect_bedside_lamp_when_on:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building04_upstairs
+      poiId: bedside_lamp
+
+    when:
+      predicate: bedside_lamp_is_on
+
+    actor:
+      - The bedside lamp is on, giving the room a focused pool of light that keeps it slightly too awake.
+
+  inspect_bedside_lamp_when_off:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building04_upstairs
+      poiId: bedside_lamp
+
+    when:
+      predicate: bedside_lamp_is_off
+
+    actor:
+      - The bedside lamp is off, leaving the corners of the room to the softer light sources.
+
+  go_to_bed_when_room_is_ready:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_upstairs
+      choiceId: go_to_bed
+
+    when:
+      predicate: building04_can_sleep
+
+    actor:
+      - You let the night light hold the edges of the room, leave the bedside lamp dark, and slide into bed.
+
+    private:
+      text:
+        - Sweet dreams come quickly here.
+
+    effects:
+      - navigate: [game_over_good]
+
+  go_to_bed_but_not_sleep:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: building04_upstairs
+      choiceId: go_to_bed
+
+    when:
+      predicate: is_night
+
+    offer:
+      label: Go To Bed
+      key: G
+
+    actor:
+      - You try settling in, but the room is not arranged for sleep yet. You get back up instead.
+
+  inspect_bed_at_night:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: building04_upstairs
+      poiId: bed
+
+    when:
+      predicate: is_night
+
+    actor:
+      - At night the bed stops looking merely tidy and starts looking deeply inviting, like the room has finally admitted what it is for.
+
+    private:
+      text:
+        - It feels less like giving up on the day and more like choosing its proper ending.

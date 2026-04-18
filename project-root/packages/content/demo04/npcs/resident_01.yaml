@@ -1,0 +1,51 @@
+# demo04 NPC dossier sketch
+#
+# Stationary indoor resident for building04.
+# Intended as the first richer dialogue example.
+
+id: resident_01
+displayName: Building 04 Resident
+role: tenant
+
+homeNodeId: building04_groundfloor
+location: building04_groundfloor
+
+expressionStyle: watchful
+reactionStyle: patient_and_plainspoken
+
+predicates:
+  player_is_here:
+    same_location: [self.location, players.active.location]
+
+  should_idle_attentive:
+    all:
+      - predicate: resident_is_home
+      - predicate: self.player_is_here
+
+  should_idle_settled:
+    predicate: resident_is_home
+
+idle:
+  activeMode: settled
+
+  modes:
+    attentive:
+      default:
+        shared:
+          - A resident waits near the stairs like they expected someone to come asking questions.
+          - They glance up toward the darkened upstairs room, then back to you, as if measuring whether you are ready to listen.
+      when:
+        predicate: self.should_idle_attentive
+
+    settled:
+      default:
+        shared:
+          - Someone from this building lingers on the ground floor instead of retreating upstairs.
+          - They keep half an ear on the house, like sleep is a thing they take seriously here.
+      when:
+        predicate: self.should_idle_settled
+
+interactionHints:
+  - They are meant to demonstrate a layered dialogue tree driven by offered actions and session-state flags.
+  - They should steer the player toward the upstairs sleep setup without feeling like a tutorial signpost.
+  - They should stay put unless a future authored event explicitly relocates them.

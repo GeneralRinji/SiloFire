@@ -1,0 +1,48 @@
+# demo04 walker sketch
+#
+# Slow block walker for outdoor ambient life.
+# Intended to move on a shared ambient world clock later.
+
+id: walker_01
+displayName: Block Walker
+role: passerby
+
+location: sidewalk_north
+behaviorMode: strolling
+
+route:
+  mode: loop
+  dwellSeconds: 10
+  moveSeconds: 12
+  steps:
+    - nodeId: sidewalk_north
+    - nodeId: sidewalk_east
+    - nodeId: sidewalk_south
+    - nodeId: sidewalk_west
+
+predicates:
+  is_here:
+    same_location: [self.location, player.location]
+
+  is_outside_in_rain:
+    all:
+      - predicate: is_raining
+      - present: [self.location]
+
+idle:
+  activeMode: strolling
+
+  modes:
+    strolling:
+      default:
+        shared:
+          - Someone drifts along the block at a patient, unhurried pace.
+          - A passerby slows just enough to look staged against the lamps.
+
+arrivalText:
+  shared:
+    - A walker comes around the block and briefly shares the sidewalk with you.
+
+departureText:
+  shared:
+    - The walker keeps going, leaving the block to itself again.

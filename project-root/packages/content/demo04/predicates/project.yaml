@@ -1,0 +1,179 @@
+# demo04 project predicate sketch
+#
+# This file now feeds the runtime-side event predicate layer.
+
+predicates:
+  is_day:
+    equals: [world.time.phase, day]
+
+  is_dusk:
+    equals: [world.time.phase, dusk]
+
+  is_evening:
+    equals: [world.time.phase, dusk]
+
+  is_night:
+    equals: [world.time.phase, night]
+
+  is_dawn:
+    equals: [world.time.phase, dawn]
+
+  is_morning:
+    equals: [world.time.phase, dawn]
+
+  building03_is_open_hours:
+    any:
+      - predicate: is_dawn
+      - predicate: is_day
+      - predicate: is_dusk
+
+  building03_is_closed_hours:
+    predicate: is_night
+
+  is_raining:
+    equals: [world.weather.kind, rain]
+
+  is_overcast:
+    equals: [world.weather.kind, overcast]
+
+  weather_is_soft:
+    equals: [world.weather.intensity, soft]
+
+  weather_is_light:
+    equals: [world.weather.intensity, light]
+
+  building01_light_is_on:
+    equals: [nodes.building01_groundfloor.light, on]
+
+  resident_is_home:
+    equals: [npcs.resident_01.location, building04_groundfloor]
+
+  resident_is_nearby:
+    same_location: [npcs.resident_01.location, player.location]
+
+  resident_dialog_idle:
+    equals: [story.resident_01.dialog_topic, idle]
+
+  resident_dialog_greeting:
+    equals: [story.resident_01.dialog_topic, greeting]
+
+  resident_dialog_room_advice:
+    equals: [story.resident_01.dialog_topic, room_advice]
+
+  resident_dialog_sleep_setup:
+    equals: [story.resident_01.dialog_topic, sleep_setup]
+
+  resident_dialog_darkness:
+    equals: [story.resident_01.dialog_topic, darkness]
+
+  resident_dialog_lamp_hint:
+    equals: [story.resident_01.dialog_topic, lamp_hint]
+
+  resident_dialog_final_hint:
+    equals: [story.resident_01.dialog_topic, final_hint]
+
+  resident_dialog_active:
+    any:
+      - predicate: resident_dialog_greeting
+      - predicate: resident_dialog_room_advice
+      - predicate: resident_dialog_sleep_setup
+      - predicate: resident_dialog_darkness
+      - predicate: resident_dialog_lamp_hint
+      - predicate: resident_dialog_final_hint
+
+  resident_can_start_dialogue:
+    all:
+      - predicate: resident_is_nearby
+      - predicate: resident_dialog_idle
+
+  resident_can_ask_about_building:
+    all:
+      - predicate: resident_is_nearby
+      - predicate: resident_dialog_greeting
+
+  resident_can_ask_about_sleep:
+    all:
+      - predicate: resident_is_nearby
+      - any:
+          - predicate: resident_dialog_greeting
+          - predicate: resident_dialog_room_advice
+
+  resident_can_admit_dislike_dark:
+    all:
+      - predicate: resident_is_nearby
+      - any:
+          - predicate: resident_dialog_room_advice
+          - predicate: resident_dialog_sleep_setup
+
+  resident_can_ask_about_lamp:
+    all:
+      - predicate: resident_is_nearby
+      - any:
+          - predicate: resident_dialog_sleep_setup
+          - predicate: resident_dialog_darkness
+
+  resident_can_press_final_hint:
+    all:
+      - predicate: resident_is_nearby
+      - predicate: resident_dialog_lamp_hint
+
+  resident_can_end_dialogue:
+    all:
+      - predicate: resident_is_nearby
+      - predicate: resident_dialog_active
+
+  resident_has_shared_sleep_hint:
+    equals: [story.resident_01.heard_sleep_hint, true]
+
+  vase_is_aligned:
+    equals: [objects.vase_01.aligned, true]
+
+  vase_is_misaligned:
+    equals: [objects.vase_01.aligned, false]
+
+  actor_recognizes_cheap_imitation:
+    equals: [actor.perception.recognizes_cheap_imitation, true]
+
+  walker_is_nearby:
+    same_location: [npcs.walker_01.location, player.location]
+
+  night_light_is_on:
+    equals: [objects.night_light.on, true]
+
+  night_light_is_off:
+    equals: [objects.night_light.on, false]
+
+  bedside_lamp_is_on:
+    equals: [objects.bedside_lamp.on, true]
+
+  bedside_lamp_is_off:
+    equals: [objects.bedside_lamp.on, false]
+
+  building04_can_sleep:
+    all:
+      - predicate: is_night
+      - predicate: night_light_is_on
+      - predicate: bedside_lamp_is_off
+
+  building04_morning_paper_is_here:
+    predicate: is_morning
+
+  building04_morning_paper_is_gone:
+    any:
+      - predicate: is_day
+      - predicate: is_dusk
+      - predicate: is_night
+
+  shop_is_closed:
+    equals: [world.business.building02.open, false]
+
+  counter_mint_available:
+    equals: [objects.building02_counter_mint.available, true]
+
+  counter_mint_missing:
+    equals: [objects.building02_counter_mint.available, false]
+
+  counter_mint_can_refill:
+    all:
+      - predicate: is_dawn
+      - predicate: counter_mint_missing
