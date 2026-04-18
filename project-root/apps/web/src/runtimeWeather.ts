@@ -1,19 +1,10 @@
 import type { ProjectedLogEntry, ProjectedProseBlock } from '../../../packages/projection/src';
 import type { ProjectWeatherSettingsDefinition, WeatherPatternDefinition, WeatherStepDefinition } from '../../../packages/schema/src';
+import type { RuntimeWeatherSnapshot } from '../../../packages/runtime/src/runtimeWeatherTypes';
+
+export type { RuntimeWeatherSnapshot } from '../../../packages/runtime/src/runtimeWeatherTypes';
 
 const DEFAULT_WEATHER_STEP_DURATION_MINUTES = 5;
-
-export interface RuntimeWeatherSnapshot {
-  patternId?: string;
-  stepId?: string;
-  kind?: string;
-  intensity?: string;
-  statusText: string[];
-  regionId?: string;
-  visibleInRecentLog?: boolean;
-  nowMs?: number;
-  source?: string;
-}
 
 export interface RuntimeWeatherPatternSnapshot {
   patternId: string;

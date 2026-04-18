@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "lib": ["ES2022"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "../parser/src/**/*.ts",
+    "../interpreter/src/**/*.ts",
+    "../projection/src/**/*.ts",
+    "../schema/src/**/*.ts"
+  ],
+  "exclude": [
+    "../parser/src/**/*.test.ts",
+    "../interpreter/src/**/*.test.ts",
+    "../projection/src/**/*.test.ts"
+  ]
+}

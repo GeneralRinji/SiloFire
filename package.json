@@ -7,6 +7,11 @@
     "build": "npm --prefix ./project-root/apps/web run build",
     "preview": "npm --prefix ./project-root/apps/web run preview",
     "test": "npm --prefix ./project-root/apps/web run test",
-    "typecheck": "npm --prefix ./project-root/apps/web run typecheck"
+    "typecheck": "npm --prefix ./project-root/apps/web run typecheck",
+    "deno:serve": "deno task serve",
+    "deno:serve:static": "deno task serve:static",
+    "deno:build": "deno task build:web",
+    "deno:deploy:create": "node ./scripts/deno_deploy_bridge.mjs create",
+    "deno:deploy": "node ./scripts/deno_deploy_bridge.mjs deploy"
   }
 }

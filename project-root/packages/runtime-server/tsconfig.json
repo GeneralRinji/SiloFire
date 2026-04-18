@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "../parser/src/**/*.ts",
+    "../schema/src/**/*.ts",
+    "../../apps/web/src/runtimeClock.ts",
+    "../../apps/web/src/runtimeAmbient.ts",
+    "../../apps/web/src/runtimeWeather.ts",
+    "../runtime/src/**/*.ts",
+    "../projection/src/**/*.ts"
+  ],
+  "exclude": [
+    "../parser/src/**/*.test.ts",
+    "../../apps/web/src/**/*.test.ts",
+    "../../apps/web/src/**/*.test.tsx"
+  ]
+}

@@ -18,6 +18,7 @@
     "../../packages/content/**/*.ts",
     "../../packages/interpreter/src/**/*.ts",
     "../../packages/projection/src/**/*.ts",
+    "../../packages/runtime/src/**/*.ts",
     "../../packages/renderer-react/src/**/*.ts",
     "../../packages/renderer-react/src/**/*.tsx",
     "../../packages/schema/src/**/*.ts"
