@@ -4,13 +4,21 @@
     "build:web": "npm run build",
     "serve:static": "deno run --unstable-sloppy-imports --allow-read --allow-net --allow-env ./scripts/serve_static.ts",
     "serve": "deno task build:web && deno task serve:static",
-    "deploy:create": "deno deploy create --org rinjistudios --app rinjistudios --source local --region global",
-    "deploy": "deno task build:web && deno deploy --org rinjistudios --app rinjistudios --prod"
+    "deploy:create": "deno deploy create --org rinjistudios --app silofire-app --source github --owner GeneralRinji --repo SiloFire --region global --do-not-use-detected-build-config --install-command \"npm install\" --build-command \"npm run build\" --runtime-mode dynamic --entrypoint ./scripts/serve_static.ts",
+    "deploy": "git push origin master"
   },
   "deploy": {
-    "org": "rinjistudios",
-    "app": "silofire"
+    "install": "npm install",
+    "build": "npm run build",
+    "runtime": {
+      "type": "dynamic",
+      "entrypoint": "./scripts/serve_static.ts"
+    }
   }
 }
+
+
+
+
 
 
