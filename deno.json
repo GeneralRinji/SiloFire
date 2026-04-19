@@ -4,7 +4,7 @@
     "build:web": "npm run build",
     "serve:static": "deno run --unstable-sloppy-imports --allow-read --allow-net --allow-env ./scripts/serve_static.ts",
     "serve": "deno task build:web && deno task serve:static",
-    "deploy:create": "deno deploy create --org rinjistudios --app silofire-app --source github --owner GeneralRinji --repo SiloFire --region global --do-not-use-detected-build-config --install-command \"npm install\" --build-command \"npm run build\" --runtime-mode dynamic --entrypoint ./scripts/serve_static.ts",
+    "deploy:create": "deno deploy create --config .deno-deploy-cli.json --source github --owner GeneralRinji --repo SiloFire --region global --do-not-use-detected-build-config --install-command \"npm install\" --build-command \"npm run build\" --runtime-mode dynamic --entrypoint ./scripts/serve_static.ts",
     "deploy": "git push origin master"
   },
   "deploy": {
