@@ -1220,6 +1220,8 @@ test('demo02 bad ending path still reaches the ending area after the final beat'
     'The porch knife was always real.',
     'So were the consequences.',
   ]);
+  assert.ok(endingPage.actions.some((action) => action.kind === 'poi' && action.id === 'credits'));
+  assert.ok(endingPage.actions.some((action) => action.kind === 'exit' && action.targetId === 'title_screen'));
 });
 
 test('demo shack run exposes bad and good ending routes through authored threshold sequences', () => {
