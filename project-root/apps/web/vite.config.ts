@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { createRuntimeApiService, matchRuntimeApiRequest } from '../../packages/runtime-server/src';
 
 const projectRoot = resolve(__dirname, '..', '..');
+const appNodeModules = resolve(__dirname, 'node_modules');
 
 function createRuntimeClockApiPlugin() {
   const runtimeApi = createRuntimeApiService({
@@ -187,6 +188,16 @@ function createRuntimeClockApiPlugin() {
 
 export default defineConfig({
   plugins: [createRuntimeClockApiPlugin(), react()],
+  resolve: {
+    alias: {
+      react: resolve(appNodeModules, 'react'),
+      'react/jsx-runtime': resolve(appNodeModules, 'react/jsx-runtime.js'),
+      'react/jsx-dev-runtime': resolve(appNodeModules, 'react/jsx-dev-runtime.js'),
+      'react-dom': resolve(appNodeModules, 'react-dom'),
+      'react-dom/client': resolve(appNodeModules, 'react-dom/client.js'),
+    },
+    dedupe: ['react', 'react-dom'],
+  },
   server: {
     fs: {
       allow: [projectRoot],
