@@ -1,7 +1,14 @@
 name: Deploy To Deno Deploy
 
 on:
+  push:
+    branches:
+      - master
   workflow_dispatch:
+
+concurrency:
+  group: deno-deploy-production
+  cancel-in-progress: true
 
 permissions:
   contents: read

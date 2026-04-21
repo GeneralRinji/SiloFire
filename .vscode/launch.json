@@ -1,0 +1,40 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Debug Silofire Web",
+			"type": "msedge",
+			"request": "launch",
+			"url": "http://localhost:5173",
+			"webRoot": "${workspaceFolder}/project-root/apps/web",
+			"preLaunchTask": "Run Silofire Web Dev Server"
+		},
+		{
+			"name": "Debug Deno Static Server",
+			"type": "node-terminal",
+			"request": "launch",
+			"command": "deno run --inspect-wait --allow-read --allow-net --allow-env ./scripts/serve_static.ts",
+			"cwd": "${workspaceFolder}",
+			"env": {
+				"PORT": "8080"
+			}
+		},
+		{
+			"name": "Debug Built App In Edge",
+			"type": "msedge",
+			"request": "launch",
+			"url": "http://localhost:8080",
+			"webRoot": "${workspaceFolder}/project-root/apps/web"
+		}
+	],
+	"compounds": [
+		{
+			"name": "Debug Built App + Deno Server",
+			"configurations": [
+				"Debug Deno Static Server",
+				"Debug Built App In Edge"
+			],
+			"stopAll": true
+		}
+	]
+}
