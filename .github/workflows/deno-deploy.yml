@@ -1,9 +1,6 @@
 name: Deploy To Deno Deploy
 
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
 
 permissions:
@@ -25,4 +22,4 @@ jobs:
       - name: Deploy application
         env:
           DENO_DEPLOY_TOKEN: ${{ secrets.DENO_DEPLOY_TOKEN }}
-        run: deno deploy --config .deno-deploy-cli.json --token "$DENO_DEPLOY_TOKEN" --prod --no-wait
+        run: deno deploy --config ./deno.json --org rinjistudios --app rinjistudios --token "$DENO_DEPLOY_TOKEN" --prod --no-wait
