@@ -1,65 +1,65 @@
 # demo04 building03 event sketch
 #
-# Building 03 uses a visible sidewalk-facing gate during open hours and forces after-hours visitors back outside.
+# Building 03 uses a visible sidewalk-facing gate and forces visitors back outside whenever the door is closed.
 
 events:
-  enter_building03_groundfloor_at_night:
+  enter_building03_groundfloor_when_closed:
     trigger:
       kind: enter
       actor: player
       nodeId: building03_groundfloor
 
     when:
-      predicate: is_night
+      predicate: building03_door_is_closed
 
     actor:
-      - The room gives you only a blink of interior shadow before the after-hours lock and the tight layout push the visit back outside.
+      - The room gives you only a blink of interior shadow before the closed door and the tight layout push the visit back outside.
       - "*boink!*"
 
     effects:
       - navigate: [building03groundfloor_sidewalk_east, backward]
 
-  enter_building03_upstairs_at_night:
+  enter_building03_upstairs_when_closed:
     trigger:
       kind: enter
       actor: player
       nodeId: building03_upstairs
 
     when:
-      predicate: is_night
+      predicate: building03_door_is_closed
 
     actor:
-      - Upstairs feels even less available after hours. A moment later you are back out at the door.
+      - Upstairs feels unavailable while the door is closed. A moment later you are back out at the door.
       - "*boink!*"
 
     effects:
       - navigate: [building03groundfloor_sidewalk_east, backward]
 
-  enter_building03_door_in_open_hours:
+  enter_building03_door_when_open:
     trigger:
       kind: enter
       actor: player
       nodeId: building03groundfloor_sidewalk_east
 
     when:
-      predicate: building03_is_open_hours
+      predicate: building03_door_is_open
 
     actor:
-      - The door stands open and unlocked for business hours.
+      - The door stands open and unlocked right now.
 
-  enter_building03_door_at_night:
+  enter_building03_door_when_closed:
     trigger:
       kind: enter
       actor: player
       nodeId: building03groundfloor_sidewalk_east
 
     when:
-      predicate: building03_is_closed_hours
+      predicate: building03_door_is_closed
 
     actor:
-      - The door is shut and locked for the night.
+      - The door is shut and locked right now.
 
-  inspect_building03_business_hours_in_open_hours:
+  inspect_building03_business_hours_when_open:
     trigger:
       kind: poi
       actor: player
@@ -67,12 +67,12 @@ events:
       poiId: business_hours
 
     when:
-      predicate: building03_is_open_hours
+      predicate: building03_door_is_open
 
     actor:
-      - Open all day. Closed at night. We're open.
+      - Open all day. Closed at night. Right now the place is open.
 
-  inspect_building03_business_hours_at_night:
+  inspect_building03_business_hours_when_closed:
     trigger:
       kind: poi
       actor: player
@@ -80,10 +80,10 @@ events:
       poiId: business_hours
 
     when:
-      predicate: building03_is_closed_hours
+      predicate: building03_door_is_closed
 
     actor:
-      - Open all day. Closed at night. Closed.
+      - Open all day. Closed at night. Right now the place is closed.
 
   enter_building03_when_open:
     trigger:
@@ -93,7 +93,7 @@ events:
       choiceId: enter_building03
 
     when:
-      predicate: building03_is_open_hours
+      predicate: building03_can_enter
 
     offer:
       label: Go Inside

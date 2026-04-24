@@ -12,6 +12,7 @@ region: diorama_block
 pois:
   - id: front_window
     displayName: Front Window
+    key: F
   - id: vase_01
     displayName: Ceramic Vase
     key: V

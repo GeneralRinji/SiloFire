@@ -8,6 +8,8 @@ Use it together with:
 - `NavigationAndTraversalV1.md`
 - `ContentSchemasV1.md`
 - `ContentContractV1.md`
+- `PredicateReferenceV1.md`
+- `ScheduleReferenceV1.md`
 
 This guide is intentionally opinionated.
 
@@ -36,6 +38,9 @@ The current runtime supports:
 - `Area`
 - `Gate`
 - `Path`
+- sidecar event authoring in files such as `events.yaml`
+- project predicates and seeded state sidecars
+- project time and weather settings sidecars
 - prose slots and flow beats
 - exits, choices, and POIs
 - visible shortcut keys
@@ -44,16 +49,21 @@ The current runtime supports:
 - directional Gate presentation
 - directional Gate blocking
 - Path blocking flows
+- visible text and recent text as separate gameplay-facing text lanes
 
 The current runtime does not yet support:
 
-- local runtime flags in content
-- conditions such as `when`
-- mutable state effects such as `set`
+- local runtime flags authored ad hoc inside normal node markdown
 - built-in stateful doors
 - arbitrary scripting
 
-Do not ask an AI assistant to author those as if they already exist.
+Current authoring boundary:
+
+- use normal `.md` node files for Area, Gate, and Path structure plus prose
+- use sidecars such as `events.yaml`, `predicates/*.yaml`, `state/*.yaml`, `settings/time.yaml`, and `settings/weather.yaml` for stateful behavior
+- `when`, `effects`, `set`, `arm_schedule`, and authored `lane` values belong in sidecars, not in ordinary node markdown front matter or body sections
+
+Do not ask an AI assistant to invent a new inline scripting format when the existing sidecar model is sufficient.
 
 ## Project Shape
 
@@ -89,6 +99,186 @@ Architecture references:
 - `docs/architecture/NavigationAndTraversalV1.md`: navigation and route behavior
 - `docs/architecture/ContentSchemasV1.md`: schema-level shapes
 - `docs/architecture/ContentContractV1.md`: normalized runtime contract
+- `docs/architecture/SessionBehaviorRulesV1.md`: visible-text versus recent-text behavior rules
+
+## Text Placement Rules
+
+When authoring content, decide whether the text is story-facing prose or status-like runtime chatter.
+
+Current rule of thumb:
+
+- authored node entry prose belongs in visible text
+- authored action-result prose belongs in visible text by default
+- weather announcements belong in recent text
+- ambient arrival and departure announcements belong in recent text when they are non-dramatic status events
+
+Important limitation:
+
+- authors do not currently set a `lane` field directly in markdown
+- `lane` is runtime/projection metadata used by the engine to decide whether emitted text belongs in visible or recent presentation
+- external AI helpers should not invent a `lane:` field inside normal Area, Gate, or Path markdown
+- authored `lane` is currently valid on sidecar events and time schedules when the sidecar format calls for it
+
+## Stateful Authoring Rules
+
+When a scene needs mutable state, conditional interaction, or time-driven changes:
+
+- keep the node itself in markdown
+- put predicates in predicate sidecars
+- put seeded state in state sidecars
+- put conditional POI, choice, enter, and exit behavior in event sidecars
+- put recurring or phase-based changes in `settings/time.yaml`
+
+Current practical rule:
+
+- if you are authoring `when`, `effects`, `set`, `arm_schedule`, or schedule `trigger` objects, you are almost certainly in a sidecar file, not a node markdown file
+
+Current demo examples:
+
+- `packages/content/demo04/diorama/block/building/building01/events.yaml`
+- `packages/content/demo04/diorama/block/building/building02/events.yaml`
+- `packages/content/demo04/diorama/predicates/project.yaml`
+- `packages/content/demo04/diorama/npcs/walker_01.yaml`
+- `packages/content/demo04/settings/time.yaml`
+
+### Schedule-Driven Object Availability
+
+Use a schedule-driven object-state pattern when something should appear, disappear, unlock, refill, or otherwise change on a time window.
+
+Current practical pattern:
+
+- seed the mutable object field in `state/world.yaml`
+- use `settings/time.yaml` schedules to change that field with `effects` and `set`
+- read that field from a predicate sidecar
+- gate enter text, POIs, and choices in `events.yaml` with those predicates
+- keep the object itself authoritative in sidecar state instead of faking it in node markdown prose
+
+Current concrete example:
+
+- `packages/content/demo04/state/world.yaml`
+- `packages/content/demo04/settings/time.yaml`
+- `packages/content/demo04/diorama/predicates/project.yaml`
+- `packages/content/demo04/diorama/block/building/building04/events.yaml`
+
+Current newspaper example:
+
+- `objects.building04_morning_paper.available` starts in seeded project state
+- a dawn schedule turns that field on
+- a day schedule turns that field back off
+- predicates such as `building04_morning_paper_is_here` read the field
+- building04 enter text, doormat inspection text, and the `read_morning_paper` choice all follow those predicates
+
+Practical rule:
+
+- if the player can only see or do something during part of the day, prefer schedule-driven object state plus predicates over hardcoding duplicate time checks across multiple event files
+
+### Explicit Stateful Access Gates
+
+Use an explicit object-state gate when access should stay server-owned but does not yet need a full schedule system.
+
+Current practical pattern:
+
+- seed an access object in `state/world.yaml`, such as `objects.building03_door.open`
+- keep broad time rules as separate predicates when they still matter
+- compose access predicates from both the explicit object state and any time predicates
+- gate the door-facing enter text, POI text, offered entry choice, and any bounce or redirect behavior from those composite predicates
+- prefer this pattern before adding schedules if the immediate need is only "make the gate stateful and authoritative"
+
+Current concrete example:
+
+- `packages/content/demo04/state/world.yaml`
+- `packages/content/demo04/diorama/predicates/project.yaml`
+- `packages/content/demo04/diorama/block/building/building03/events.yaml`
+
+Current Building 03 example:
+
+- `objects.building03_door.open` is the door truth
+- `building03_door_is_open` combines open-hours logic with explicit door state
+- `building03_door_is_closed` covers both closed hours and explicitly forced closure
+- interior enter events bounce the player back outside whenever the door is closed
+
+Practical rule:
+
+- if you need a stateful door tonight and richer hours can wait, model the door as explicit object state first and let schedules plug into that same state later
+
+### Interaction-Armed Refill Loops
+
+Use an interaction-armed refill pattern when a player action temporarily removes something and a later schedule restores it.
+
+Current practical pattern:
+
+- seed the object as present or absent in `state/world.yaml`
+- let the player action flip the object state in `events.yaml`
+- record the phase or other simple state needed to decide when it comes back
+- use one or more schedules in `settings/time.yaml` to restore the object on the authored cadence
+- gate both POI text and the repeatable choice from predicates so the player sees the current state clearly
+
+Current concrete example:
+
+- `packages/content/demo04/state/world.yaml`
+- `packages/content/demo04/settings/time.yaml`
+- `packages/content/demo04/diorama/predicates/project.yaml`
+- `packages/content/demo04/diorama/block/building/building02/events.yaml`
+
+Current wrapped mint example:
+
+- `objects.building02_counter_mint.available` starts as `true`
+- `take_counter_mint` turns availability off and stores `last_taken_phase`
+- the bowl POI and the take-mint choice both switch on predicates such as `counter_mint_available` and `counter_mint_missing`
+- phase-specific refill schedules restore availability on the next matching phase cycle
+
+Practical rule:
+
+- if an interaction consumes a small renewable object, prefer recording the minimal refill state and letting `settings/time.yaml` restore it instead of inventing bespoke cooldown scripting
+
+### Ambient Roaming NPCs
+
+Author ambient walkers and similar roaming NPCs in sidecar YAML files, not in node markdown.
+
+Current practical pattern:
+
+- give the NPC an `id`, `displayName`, `role`, and seeded `location`
+- use a looped `route` with `dwellSeconds`, `moveSeconds`, and ordered `steps`
+- use `arrivalText`, `presenceText`, `transitText`, and `departureText` for non-dramatic runtime status lines
+- keep those status lines in recent text rather than trying to restate them as visible node prose
+- only keep NPC-local predicates if they are actually referenced by authored `idle` or other conditional behavior
+
+Current concrete example:
+
+- `packages/content/demo04/diorama/npcs/walker_01.yaml`
+
+### NPC-Local Predicates And `self.` Usage
+
+NPC sidecars may define their own local predicate blocks when the logic is only meaningful for that NPC's idle or other NPC-authored behavior.
+
+Current practical pattern:
+
+- keep reusable project-wide rules in `predicates/project.yaml`
+- keep NPC-local helper predicates inside the NPC sidecar when they only exist to choose that NPC's authored modes
+- use `self.` when the predicate should read fields from that same NPC record
+- use project predicates when the condition is shared across multiple authored surfaces
+
+Current concrete example:
+
+- `packages/content/demo04/diorama/npcs/resident_01.yaml`
+
+Current resident example:
+
+- `player_is_here` uses `same_location: [self.location, players.active.location]`
+- `should_idle_attentive` composes a project predicate and a local predicate
+- idle modes use `when: predicate: self.should_idle_attentive` and `self.should_idle_settled`
+
+Current practical rules:
+
+- `self.<field>` resolves against the current NPC record, such as `self.location`
+- `self.<predicate_name>` resolves against that NPC sidecar's local `predicates` block
+- only use `self.` where the runtime is already evaluating an NPC-local authored surface
+- do not use NPC-local predicates as a substitute for shared project predicates that multiple files need to reference
+- if a local predicate is not used by a current NPC-authored behavior, remove it instead of keeping speculative helper logic around
+
+If a piece of text would feel noisy when repeated often, it probably belongs in recent text.
+
+If a piece of text is something the player is deliberately doing or reading, it probably belongs in visible text.
 
 ## Required Project Conventions
 
@@ -616,7 +806,8 @@ If you are using a browser AI assistant without repo context, tell it to do all 
 - treat `Area`, `Gate`, and `Path` as the only current node families
 - use `packages/presets` for reusable patterns and stripped examples after reading the schema docs
 - preserve existing source format and naming patterns
-- do not invent unsupported features such as local flags, `when`, or `effects`
+- do not invent unsupported features such as ad hoc local flags or arbitrary scripting
+- use `when` and `effects` only in the existing sidecar formats, not in normal node markdown
 - ground all examples in `packages/content/demo` and `docs/architecture`
 - keep navigation concise and readable
 - prefer Gates for meaningful thresholds

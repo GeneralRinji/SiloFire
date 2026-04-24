@@ -20,28 +20,17 @@ route:
     - nodeId: sidewalk_south
     - nodeId: sidewalk_west
 
-predicates:
-  is_here:
-    same_location: [self.location, player.location]
-
-  is_outside_in_rain:
-    all:
-      - predicate: is_raining
-      - present: [self.location]
-
-idle:
-  activeMode: strolling
-
-  modes:
-    strolling:
-      default:
-        shared:
-          - Someone drifts along the block at a patient, unhurried pace.
-          - A passerby slows just enough to look staged against the lamps.
-
 arrivalText:
   shared:
     - A walker comes around the block and briefly shares the sidewalk with you.
+
+presenceText:
+  shared:
+    - A walker is already here, keeping to the sidewalk.
+
+transitText:
+  shared:
+    - You spot a walker moving between corners along the block.
 
 departureText:
   shared:

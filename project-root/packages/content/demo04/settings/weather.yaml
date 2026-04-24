@@ -32,5 +32,11 @@ visibility:
   regions:
     diorama_block: true
   nodes:
+    building01_groundfloor: false
+    building01_upstairs: false
+    building02_groundfloor: false
+    building02_upstairs: false
+    building03_groundfloor: false
+    building03_upstairs: false
     building04_groundfloor: false
     building04_upstairs: false

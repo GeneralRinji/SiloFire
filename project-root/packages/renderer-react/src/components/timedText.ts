@@ -1,4 +1,4 @@
-import { delayValueToMs } from './ProseBlocks';
+import { delayValueToMs } from './timing';
 
 const DELAY_MARKER_PATTERN = /^\s*\[delay:\s*([^\]]+)\]\s*/i;
 

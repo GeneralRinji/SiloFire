@@ -10,14 +10,17 @@ Recommended reading order for the current implementation and authoring model:
 
 1. `ContentSchemasV1.md`
 2. `SourceFormatV1.md`
-3. `ContentContractV1.md`
-4. `NavigationAndTraversalV1.md`
-5. `ProjectionViewModelV1.md`
-6. `RuntimeCompositionV1.md`
-7. `AppSessionStateV1.md`
-8. `ContentAuthoringGuideV1.md`
-9. `ParserRulesV1.md`
-10. `BrowserAuthoringPrompt.md`
+3. `ContentAuthoringGuideV1.md`
+4. `PredicateReferenceV1.md`
+5. `ScheduleReferenceV1.md`
+6. `ContentContractV1.md`
+7. `NavigationAndTraversalV1.md`
+8. `ProjectionViewModelV1.md`
+9. `RuntimeCompositionV1.md`
+10. `AppSessionStateV1.md`
+11. `SessionBehaviorRulesV1.md`
+12. `ParserRulesV1.md`
+13. `BrowserAuthoringPrompt.md`
 
 For forward-looking ideas that are intentionally not hard contract yet, see `PlannedNext.md`.
 
@@ -28,6 +31,11 @@ The v1 files should be treated as the firm working reference for the current sys
 They are not final forever, but they are intended to describe the behavior authors and implementers should rely on today.
 
 For external content-authoring AI handoff, start with `ContentSchemasV1.md` first, then move to `SourceFormatV1.md` and `ContentAuthoringGuideV1.md`.
+
+Important handoff note:
+
+- the node-family docs alone are not enough for stateful content
+- if the request involves predicates, conditional interactions, mutable state, recent-log lane choice, or time/weather-driven behavior, the assistant also needs the sidecar guidance from `ContentAuthoringGuideV1.md`, `PredicateReferenceV1.md`, `ScheduleReferenceV1.md`, `ContentContractV1.md`, and `RuntimeCompositionV1.md`
 
 After that, use `packages/presets` for reusable patterns and stripped examples, then use `packages/content/demo` for richer authored examples.
 
@@ -56,7 +64,8 @@ Use this when you want to understand:
 - path direction and one-way paths
 - one-way gates and threshold resolution
 - passthrough gate resolution
-- history and keyboard navigation behavior
+- keyboard navigation behavior
+- why `back` is runtime-resolved rather than browser-history-driven
 
 ### `ProjectionViewModelV1.md`
 
@@ -83,7 +92,7 @@ Use this when you want to understand:
 
 ### `AppSessionStateV1.md`
 
-Browser-only run/session layer.
+Client-side app/session boundary and migration notes.
 
 Use this when you want to understand:
 
@@ -91,6 +100,18 @@ Use this when you want to understand:
 - save and continue restoration boundaries
 - project-scoped recent log and attempt bookkeeping
 - where route replacement helpers should live
+
+### `SessionBehaviorRulesV1.md`
+
+Gameplay-facing session behavior contract.
+
+Use this when you want to understand:
+
+- canonical page truth versus client display orchestration
+- visible text versus recent text responsibilities
+- weather and ambient announcement rules
+- continue, restore, new-game, and reset expectations
+- what gameplay state belongs to the server/runtime session boundary
 
 ### `SourceFormatV1.md`
 
@@ -117,6 +138,29 @@ Use this when you want to understand:
 - recommended navigation density and ordering
 - what to reuse from existing demo content
 - what external AI helpers should and should not assume
+- where stateful authoring belongs when the request needs predicates, effects, or schedules
+
+### `PredicateReferenceV1.md`
+
+Compact authored predicate reference.
+
+Use this when you want to understand:
+
+- which predicate operators are actually supported today
+- how operand resolution works for runtime paths versus literal values
+- what current predicate shapes are safe for external AI to author
+- what not to invent in sidecar logic
+
+### `ScheduleReferenceV1.md`
+
+Compact authored schedule reference.
+
+Use this when you want to understand:
+
+- which schedule fields and trigger kinds are safe to author now
+- how active windows actually behave
+- how schedules target nodes, folders, regions, or tags
+- how schedule prose and schedule effects fit into stateful content
 
 ### `ParserRulesV1.md`
 

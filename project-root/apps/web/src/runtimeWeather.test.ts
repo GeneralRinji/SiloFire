@@ -171,6 +171,7 @@ test('weather log entry only materializes when visibility and status text are pr
   });
 
   assert.equal(visibleEntry?.text, 'A light rain traces the curb.');
+  assert.equal(visibleEntry?.lane, 'recent');
   assert.equal(hiddenEntry, undefined);
 });
 
@@ -268,6 +269,12 @@ test('weather change announcements only fire on same-node updates or hidden-to-v
   };
 
   assert.equal(shouldAnnounceWeatherChange({
+    currentNodeId: 'sidewalk_north',
+    snapshot: nextSnapshot,
+    existingEntries: [],
+  }), true);
+
+  assert.equal(shouldAnnounceWeatherChange({
     previousNodeId: 'sidewalk_north',
     currentNodeId: 'sidewalk_north',
     previousSnapshot,
@@ -289,7 +296,21 @@ test('weather change announcements only fire on same-node updates or hidden-to-v
       visibleInRecentLog: false,
     },
     snapshot: nextSnapshot,
+    existingEntries: [],
   }), true);
+
+  const existingWeatherEntry = buildRuntimeWeatherLogEntry(nextSnapshot);
+
+  assert.equal(shouldAnnounceWeatherChange({
+    previousNodeId: 'building04_groundfloor',
+    currentNodeId: 'sidewalk_north',
+    previousSnapshot: {
+      ...nextSnapshot,
+      visibleInRecentLog: false,
+    },
+    snapshot: nextSnapshot,
+    existingEntries: existingWeatherEntry ? [existingWeatherEntry] : [],
+  }), false);
 });
 
 test('weather stream url targets the shared runtime endpoint', () => {

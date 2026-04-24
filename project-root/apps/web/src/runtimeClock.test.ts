@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildRuntimeClockStreamUrl, createServerRuntimeClockSource, formatPreviewClockCountdown, resolvePreviewRuntimeClockSnapshot, resolveProjectClockSnapshot, type RuntimeClockStream } from './runtimeClock';
+import { buildRuntimeClockStreamUrl, createPreviewRuntimeClockSource, createServerRuntimeClockSource, formatPreviewClockCountdown, resolvePreviewRuntimeClockSnapshot, resolveProjectClockSnapshot, type RuntimeClockStream } from './runtimeClock';
 
 test('preview runtime clock rotates earth-like phases using authored minutes per phase', () => {
   const timeSettings = {
@@ -110,6 +110,113 @@ test('project clock snapshot honors region calendar assignments for a node', () 
 
   assert.equal(snapshot?.calendarId, 'archive');
   assert.equal(snapshot?.phase, 'silver_dawn');
+});
+
+test('project clock snapshot prefers the deepest matching folder calendar over region and default assignments', () => {
+  const snapshot = resolveProjectClockSnapshot({
+    projectId: 'demo04',
+    timeSettings: {
+      calendars: {
+        default_world: {
+          preset: 'earth_like_4phase',
+          minutesPerPhase: 1,
+        },
+        district_world: {
+          phases: [
+            { id: 'district_dawn', durationMinutes: 1 },
+            { id: 'district_day', durationMinutes: 1 },
+          ],
+        },
+        building_world: {
+          phases: [
+            { id: 'building_open', durationMinutes: 1 },
+            { id: 'building_closed', durationMinutes: 1 },
+          ],
+        },
+        region_world: {
+          phases: [
+            { id: 'region_a', durationMinutes: 1 },
+            { id: 'region_b', durationMinutes: 1 },
+          ],
+        },
+      },
+      assignments: {
+        defaultCalendar: 'default_world',
+        folders: {
+          district: 'district_world',
+          'district/building01': 'building_world',
+        },
+        regions: {
+          archive_region: 'region_world',
+        },
+      },
+    },
+    defaultClock: {
+      phase: 'building_open',
+      cycle: ['building_open', 'building_closed'],
+    },
+    nodeFoldersById: {
+      archive_room: ['district', 'district/building01'],
+    },
+    nodeRegionsById: {
+      archive_room: 'archive_region',
+    },
+  }, 0, undefined, 'archive_room');
+
+  assert.equal(snapshot?.calendarId, 'building_world');
+  assert.equal(snapshot?.phase, 'building_open');
+});
+
+test('preview runtime clock source uses folder-scoped calendar assignments from runtime project metadata', () => {
+  const clockSource = createPreviewRuntimeClockSource({
+    demo04: {
+      projectId: 'demo04',
+      startNodeId: 'title_screen',
+      nodes: [],
+      nodeFoldersById: {
+        building04_groundfloor: ['building04'],
+      },
+      nodeRegionsById: {
+        building04_groundfloor: 'diorama_block',
+      },
+      pagesByNodeId: {},
+      eventsByNodeId: {},
+      timeSettings: {
+        calendars: {
+          diorama_block: {
+            preset: 'earth_like_4phase',
+            minutesPerPhase: 1,
+          },
+          interior_longform: {
+            phases: [
+              { id: 'day', durationMinutes: 2 },
+              { id: 'dusk', durationMinutes: 1 },
+              { id: 'night', durationMinutes: 2 },
+              { id: 'dawn', durationMinutes: 1 },
+            ],
+          },
+        },
+        assignments: {
+          defaultCalendar: 'diorama_block',
+          folders: {
+            building04: 'interior_longform',
+          },
+          regions: {
+            diorama_block: 'diorama_block',
+          },
+        },
+      },
+      defaultClock: {
+        phase: 'night',
+        cycle: ['day', 'dusk', 'night', 'dawn'],
+      },
+    },
+  });
+
+  const snapshot = clockSource.getSnapshot('demo04', 'building04_groundfloor');
+
+  assert.equal(snapshot?.calendarId, 'interior_longform');
+  assert.equal(snapshot?.phase, 'night');
 });
 
 test('server clock source falls back to the last project snapshot when a node-specific snapshot is missing', () => {

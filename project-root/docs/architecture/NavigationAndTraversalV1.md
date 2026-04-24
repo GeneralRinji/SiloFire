@@ -16,7 +16,7 @@ The complexity lives in how authored references resolve, not in the presentation
 
 ## Route State
 
-The web shell tracks route state as:
+The active runtime/session route state is represented as:
 
 - `projectId`
 - `nodeId`
@@ -25,7 +25,7 @@ The web shell tracks route state as:
 
 `pathDirection` is important.
 
-It lets the app render and resolve the same Path differently depending on which side the player entered from.
+It lets the runtime render and resolve the same Path differently depending on which side the player entered from.
 
 `pathBeatIndex` matters when a Path is being traversed in paged mode.
 
@@ -249,19 +249,22 @@ Numeric keys are also supported.
 
 The app ignores keyboard shortcut handling when focus is in an editable element.
 
-## History And Recent Log
+## Recent Log And Session Artifacts
 
-The current app also tracks:
+The current app code also tracks:
 
-- per-project node history
 - per-project path visit counts
 - per-node recent log entries
 
-History is used for the current `back` behavior.
-
-Path visit counts are used to decide whether a Path should project its `first_visit`, `repeat`, or fallback flow behavior.
-
 Recent log is appended after projection rather than being baked into every projected page by default.
+
+Path visit counts are currently used to decide whether a Path should project its `first_visit`, `repeat`, or fallback flow behavior.
+
+Treat browser-managed history as drift rather than intended traversal behavior.
+
+`back` behavior should come from runtime/authored resolution, not from a remembered browser route.
+
+Visit-count authority that affects authored projection is also a migration target toward server/session ownership rather than a client-side architectural goal.
 
 ## Non-Goals
 

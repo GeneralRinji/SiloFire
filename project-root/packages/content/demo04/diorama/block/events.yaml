@@ -1,0 +1,57 @@
+# demo04 block-level event sketch
+#
+# Outdoor enter sample so time/weather-style predicates can shape passive arrival text.
+
+events:
+  inspect_streetlamps_in_daylight:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: sidewalk_north
+      poiId: streetlamps
+
+    when:
+      predicate: is_day
+
+    actor:
+      - The streetlamps are off. In daylight they look decorative, almost unnecessary.
+
+  inspect_streetlamps_at_dusk:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: sidewalk_north
+      poiId: streetlamps
+
+    when:
+      predicate: is_dusk
+
+    actor:
+      - The streetlamps have just come on, each globe warming from dim amber to a steadier glow.
+
+  inspect_streetlamps_at_night:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: sidewalk_north
+      poiId: streetlamps
+
+    when:
+      predicate: is_night
+
+    actor:
+      - The streetlamps are fully on now, throwing pale halos across the glass and concrete.
+
+  inspect_streetlamps_at_dawn:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: sidewalk_north
+      poiId: streetlamps
+
+    when:
+      predicate: is_dawn
+
+    actor:
+      - The streetlamps have gone dark again, leaving the block to the thin blue light of dawn.
+

@@ -1,10 +1,11 @@
 import { parseAreaToSchema, parseEventSidecar, parseGateToSchema, parseNpcPredicateDefinitions, parseNpcSidecar, parsePathToSchema, parsePredicateSidecar, parseStateSidecar, parseTimeSettingsSidecar, parseWeatherSettingsSidecar } from '../../parser/src';
 import { interpretAreaNode, interpretGateNode, interpretPathNode } from '../../interpreter/src';
 import type { ParsedFrontMatterObject, ParsedFrontMatterValue } from '../../parser/src';
-import type { AreaObject, ContentEventDefinition, ContentNpcDefinition, FlowBeatMarker, GateObject, PathDirection, PathObject, ProjectTimeSettingsDefinition, ProjectWeatherSettingsDefinition, ProseSlot, ProseTextBlock, ProseTrigger, ProseVariant, TitleScreenConfig } from '../../schema/src';
+import type { AreaObject, ContentEventDefinition, ContentNpcDefinition, EventEffectDefinition, FlowBeatMarker, GateObject, PathDirection, PathObject, ProjectTimeSettingsDefinition, ProjectWeatherSettingsDefinition, ProseSlot, ProseTextBlock, ProseTrigger, ProseVariant, TimeScheduleDefinition, TimeScheduleTriggerDefinition, TitleScreenConfig } from '../../schema/src';
 import { projectAreaNode, projectGateNode, projectPathNode, type ProjectionResult } from '../../projection/src';
-import type { ProjectedAction, ProjectedControl, ProjectedLogEntry, ProjectedProseBlock } from '../../projection/src';
+import type { ProjectedAction, ProjectedControl, ProjectedLogEntry, ProjectedProseBlock, ProjectedTextLane } from '../../projection/src';
 import type { ContentObject } from '../../schema/src';
+import { resolveAssignedProjectCalendar } from './runtimeClock';
 import type { RuntimeWeatherSnapshot } from './runtimeWeatherTypes';
 
 export type { RuntimeWeatherSnapshot } from './runtimeWeatherTypes';
@@ -19,6 +20,7 @@ export interface RuntimeProjectData {
   projectId: string;
   startNodeId?: string;
   nodes: RuntimeNodeLink[];
+  nodeFoldersById: Record<string, string[]>;
   nodeRegionsById: Record<string, string>;
   pagesByNodeId: Record<string, ProjectionResult>;
   eventsByNodeId: Record<string, ContentEventDefinition[]>;
@@ -43,6 +45,8 @@ export interface RuntimeClockSnapshot {
   cycle?: string[];
   nowMs?: number;
   source?: string;
+  calendarId?: string;
+  nextPhaseInMs?: number;
 }
 
 export interface RuntimeClockSource {
@@ -148,6 +152,7 @@ export function createContentRuntime(
         projectId,
         startNodeId: project.startNodeId,
         nodes: project.nodes,
+        nodeFoldersById: project.nodeFoldersById,
         nodeRegionsById: project.nodeRegionsById,
         pagesByNodeId: project.pagesByNodeId,
         eventsByNodeId: project.eventsByNodeId,
@@ -181,7 +186,7 @@ export function createContentRuntime(
           return eventOutcome;
         }
 
-        return createLogOutcome(resolveProseSlotEntry(nodeRecord.node, 'poi_inspect', action.id, options.attempt));
+        return createLogOutcome(resolveProseSlotEntry(nodeRecord.node, 'poi_inspect', action.id, options.attempt), 'recent');
       }
 
       if (action.kind === 'choice') {
@@ -191,7 +196,7 @@ export function createContentRuntime(
           return eventOutcome;
         }
 
-        return createLogOutcome(resolveProseSlotEntry(nodeRecord.node, 'choice_result', action.id, options.attempt));
+        return createLogOutcome(resolveProseSlotEntry(nodeRecord.node, 'choice_result', action.id, options.attempt), 'visible');
       }
     }
 
@@ -203,7 +208,7 @@ export function createContentRuntime(
           return eventOutcome;
         }
 
-        return createLogOutcome(resolveProseSlotEntry(nodeRecord.node, 'poi_inspect', action.id, options.attempt));
+        return createLogOutcome(resolveProseSlotEntry(nodeRecord.node, 'poi_inspect', action.id, options.attempt), 'recent');
       }
 
       if (action.kind === 'choice') {
@@ -213,7 +218,7 @@ export function createContentRuntime(
           return eventOutcome;
         }
 
-        return createLogOutcome(resolveProseSlotEntry(nodeRecord.node, 'choice_result', action.id, options.attempt));
+        return createLogOutcome(resolveProseSlotEntry(nodeRecord.node, 'choice_result', action.id, options.attempt), 'visible');
       }
     }
 
@@ -235,7 +240,7 @@ export function createContentRuntime(
       return {
         nextNodeId: resolvedTarget.nodeId,
         nextPathDirection: resolvedTarget.pathDirection,
-        logEntry: createLogEntry(`Taking exit: ${action.label}`),
+        logEntry: createLogEntry(`Taking exit: ${action.label}`, undefined, undefined, 'recent'),
       };
     }
 
@@ -297,7 +302,7 @@ export function createContentRuntime(
           return {
             nextNodeId: reverseTarget.nodeId,
             nextPathDirection: reverseTarget.pathDirection,
-            logEntry: createLogEntry('You turn back.'),
+            logEntry: createLogEntry('You turn back.', undefined, undefined, 'recent'),
           };
         }
       }
@@ -310,7 +315,7 @@ export function createContentRuntime(
         return {
           nextNodeId: nextTarget.nodeId,
           nextPathDirection: nextTarget.pathDirection,
-          logEntry: createLogEntry(control.kind === 'continue' ? 'You keep moving.' : 'You skip ahead.'),
+          logEntry: createLogEntry(control.kind === 'continue' ? 'You keep moving.' : 'You skip ahead.', undefined, undefined, 'recent'),
         };
       }
     }
@@ -330,7 +335,7 @@ export function createContentRuntime(
         return {
           nextNodeId: nextTarget.nodeId,
           nextPathDirection: nextTarget.pathDirection,
-          logEntry: createLogEntry('You step through.'),
+          logEntry: createLogEntry('You step through.', undefined, undefined, 'recent'),
         };
       }
     }
@@ -344,7 +349,7 @@ export function createContentRuntime(
       if (currentSideNodeId) {
         return {
           nextNodeId: currentSideNodeId,
-          logEntry: createLogEntry('You step back.'),
+          logEntry: createLogEntry('You step back.', undefined, undefined, 'recent'),
         };
       }
     }
@@ -383,7 +388,7 @@ export function createContentRuntime(
       return undefined;
     }
 
-    const currentSessionState = hydrateRuntimeSessionState(project, options.sessionState);
+    const currentSessionState = hydrateRuntimeSessionState(project, options.sessionState, nodeId, undefined, runtimeOptions.clockSource, runtimeOptions.weatherSource);
     const basePage = projectContentObject(nodeRecord.node, pathDirection, options);
 
     if (!basePage || basePage.kind !== 'page') {
@@ -411,9 +416,25 @@ export function createContentRuntime(
     return resolveSidecarOfferedActions(projectId, project, nodeId, options, runtimeOptions.clockSource, runtimeOptions.weatherSource);
   }
 
+  function hydrateProjectSessionState(
+    projectId: string,
+    nodeId: string | undefined,
+    sessionState?: RuntimeSessionState,
+    systemContext?: RuntimeSystemContext,
+  ): RuntimeSessionState | undefined {
+    const project = projectRuntimeInternal[projectId];
+
+    if (!project) {
+      return undefined;
+    }
+
+    return hydrateRuntimeSessionState(project, sessionState, nodeId, systemContext, runtimeOptions.clockSource, runtimeOptions.weatherSource);
+  }
+
   return {
     runtime,
     createInitialProjectSessionState,
+    hydrateProjectSessionState,
     resolveProjectAction,
     resolveProjectControl,
     resolveProjectEnter,
@@ -447,9 +468,18 @@ export function appendRecentLog(
     return page;
   }
 
+  const visibleEntries = recentEntries.filter((entry) => entry.lane === 'visible');
+  const laneRecentEntries = recentEntries.filter((entry) => entry.lane !== 'visible');
+
   return {
     ...page,
-    recentLog: [...(page.recentLog ?? []), ...recentEntries],
+    proseBlocks: [
+      ...page.proseBlocks,
+      ...visibleEntries.flatMap(toProseBlocksFromLogEntry),
+    ],
+    recentLog: laneRecentEntries.length > 0
+      ? [...(page.recentLog ?? []), ...laneRecentEntries]
+      : page.recentLog,
   };
 }
 
@@ -561,17 +591,42 @@ function resolveProseSlot(node: AreaObject | GateObject, trigger: ProseTrigger, 
   return matchingSlots.find((slot) => slot.attempt === undefined) ?? matchingSlots[0];
 }
 
-function createLogOutcome(entry: { text: string; markers?: FlowBeatMarker[]; blocks?: ProjectedProseBlock[] } | undefined): RuntimeInteractionOutcome {
-  return entry ? { logEntry: createLogEntry(entry.text, entry.markers, entry.blocks) } : {};
+function createLogOutcome(
+  entry: { text: string; markers?: FlowBeatMarker[]; blocks?: ProjectedProseBlock[] } | undefined,
+  lane: ProjectedTextLane,
+): RuntimeInteractionOutcome {
+  return entry ? { logEntry: createLogEntry(entry.text, entry.markers, entry.blocks, lane) } : {};
 }
 
-function createLogEntry(text: string, markers?: FlowBeatMarker[], blocks?: ProjectedProseBlock[]): ProjectedLogEntry {
+function createLogEntry(
+  text: string,
+  markers?: FlowBeatMarker[],
+  blocks?: ProjectedProseBlock[],
+  lane: ProjectedTextLane = 'recent',
+): ProjectedLogEntry {
   return {
     id: `log-${Math.random().toString(36).slice(2, 10)}`,
     text,
+    lane,
     markers,
     blocks,
   };
+}
+
+function toProseBlocksFromLogEntry(entry: ProjectedLogEntry): ProjectedProseBlock[] {
+  if (entry.blocks && entry.blocks.length > 0) {
+    return entry.blocks.map((block) => ({
+      ...block,
+      groupId: block.groupId ? `runtime-log:${entry.id}:${block.groupId}` : `runtime-log:${entry.id}`,
+    }));
+  }
+
+  return [{
+    groupId: `runtime-log:${entry.id}`,
+    kind: 'paragraph',
+    text: entry.text,
+    markers: entry.markers,
+  }];
 }
 
 function toProjectedLogBlocks(blocks: ProseTextBlock[] | undefined): ProjectedProseBlock[] | undefined {
@@ -758,6 +813,7 @@ function buildSingleProjectRuntime(
     region: record.node.region,
   }));
 
+  const nodeFoldersById = Object.fromEntries(records.map((record) => [record.node.id, getRecordFolderAncestors(record)]));
   const nodeRegionsById = Object.fromEntries(records.map((record) => [record.node.id, record.node.region]));
   const pagesByNodeId = Object.fromEntries(records.map((record) => [record.node.id, record.page]));
   const nodeRecordsById = Object.fromEntries(records.map((record) => [record.node.id, record]));
@@ -779,6 +835,7 @@ function buildSingleProjectRuntime(
     projectId,
     startNodeId: pickStartNodeId(records),
     nodes,
+    nodeFoldersById,
     nodeRegionsById,
     pagesByNodeId,
     eventsByNodeId,
@@ -918,12 +975,21 @@ function selectNpcIdleLines(
 function hydrateRuntimeSessionState(
   project: RuntimeProjectRecord,
   sessionState: RuntimeSessionState | undefined,
+  nodeId?: string,
+  systemContext?: RuntimeSystemContext,
+  clockSource?: RuntimeClockSource,
+  weatherSource?: RuntimeWeatherSource,
 ): RuntimeSessionState {
-  if (!sessionState) {
-    return cloneRuntimeSessionState(project.initialSessionState);
-  }
-
-  return mergeRuntimeSessionState(project.initialSessionState, sessionState);
+  const mergedState = sessionState
+    ? mergeRuntimeSessionState(project.initialSessionState, sessionState)
+    : cloneRuntimeSessionState(project.initialSessionState);
+  const previousSystemContext: RuntimeSystemContext = {
+    clock: getRuntimeClockSnapshotFromSessionState(mergedState),
+    weather: getRuntimeWeatherSnapshotFromSessionState(mergedState),
+  };
+  const runtimeSystemContext = resolveBaseRuntimeSystemContext(project.projectId, project, nodeId, mergedState, systemContext, clockSource, weatherSource);
+  const synchronizedState = syncRuntimeSystemContext(mergedState, runtimeSystemContext);
+  return applyRuntimeSchedules(project, synchronizedState, runtimeSystemContext, nodeId, previousSystemContext);
 }
 
 function resolveSidecarActionEvent(
@@ -935,7 +1001,7 @@ function resolveSidecarActionEvent(
   clockSource: RuntimeClockSource | undefined,
   weatherSource?: RuntimeWeatherSource,
 ): RuntimeInteractionOutcome | undefined {
-  const currentSessionState = hydrateRuntimeSessionState(project, options.sessionState);
+  const currentSessionState = hydrateRuntimeSessionState(project, options.sessionState, nodeId, options.systemContext, clockSource, weatherSource);
   const systemContext = resolveRuntimeSystemContext(projectId, project, nodeId, currentSessionState, options.systemContext, clockSource, weatherSource);
 
   const matchingEntry = (project.eventsByNodeId[nodeId] ?? []).find((event) => {
@@ -953,7 +1019,7 @@ function resolveSidecarActionEvent(
 
   const eventContext = createRuntimeEventContext(matchingEntry, currentSessionState, options, systemContext);
   const eventResult = createResolvedEventResult(matchingEntry, project, currentSessionState, eventContext);
-  const logEntry = createSidecarEventLogEntry(eventResult);
+  const logEntry = createSidecarEventLogEntry(matchingEntry, eventResult);
   const nextSessionState = applySidecarEventEffects(matchingEntry, currentSessionState, eventContext);
   const nextTarget = resolveSidecarEventTarget(project, nodeId, matchingEntry);
   const resetNodeId = resolveSidecarEventResetNodeId(matchingEntry);
@@ -976,7 +1042,7 @@ function resolveSidecarOfferedActions(
   clockSource: RuntimeClockSource | undefined,
   weatherSource?: RuntimeWeatherSource,
 ): ProjectedAction[] {
-  const currentSessionState = hydrateRuntimeSessionState(project, options.sessionState);
+  const currentSessionState = hydrateRuntimeSessionState(project, options.sessionState, nodeId, options.systemContext, clockSource, weatherSource);
   const systemContext = resolveRuntimeSystemContext(projectId, project, nodeId, currentSessionState, options.systemContext, clockSource, weatherSource);
 
   return (project.eventsByNodeId[nodeId] ?? []).flatMap((event) => {
@@ -1015,7 +1081,7 @@ function resolveSidecarEnterEvent(
   clockSource: RuntimeClockSource | undefined,
   weatherSource?: RuntimeWeatherSource,
 ): RuntimeInteractionOutcome | undefined {
-  const currentSessionState = hydrateRuntimeSessionState(project, options.sessionState);
+  const currentSessionState = hydrateRuntimeSessionState(project, options.sessionState, nodeId, options.systemContext, clockSource, weatherSource);
   const systemContext = resolveRuntimeSystemContext(projectId, project, nodeId, currentSessionState, options.systemContext, clockSource, weatherSource);
 
   const matchingEntry = (project.eventsByNodeId[nodeId] ?? []).find((event) => {
@@ -1033,7 +1099,7 @@ function resolveSidecarEnterEvent(
 
   const eventContext = createRuntimeEventContext(matchingEntry, currentSessionState, options, systemContext);
   const eventResult = createResolvedEventResult(matchingEntry, project, currentSessionState, eventContext);
-  const logEntry = createSidecarEventLogEntry(eventResult);
+  const logEntry = createSidecarEventLogEntry(matchingEntry, eventResult);
   const nextSessionState = applySidecarEventEffects(matchingEntry, currentSessionState, eventContext);
   const nextTarget = resolveSidecarEventTarget(project, nodeId, matchingEntry);
   const resetNodeId = resolveSidecarEventResetNodeId(matchingEntry);
@@ -1110,7 +1176,7 @@ function createResolvedEventResult(
   return result;
 }
 
-function createSidecarEventLogEntry(result: RuntimeResolvedEventResult): ProjectedLogEntry {
+function createSidecarEventLogEntry(event: ContentEventDefinition, result: RuntimeResolvedEventResult): ProjectedLogEntry {
   const blocks: ProjectedProseBlock[] = [];
 
   appendEventLogBlocks(blocks, 'actor', result.actor.text);
@@ -1121,7 +1187,15 @@ function createSidecarEventLogEntry(result: RuntimeResolvedEventResult): Project
 
   const firstBlockText = blocks[0]?.text ?? result.eventId;
 
-  return createLogEntry(firstBlockText, undefined, blocks);
+  return createLogEntry(firstBlockText, undefined, blocks, event.lane ?? getDefaultSidecarEventLane(event));
+}
+
+function getDefaultSidecarEventLane(event: ContentEventDefinition): ProjectedTextLane {
+  if (event.trigger.kind === 'choice') {
+    return 'visible';
+  }
+
+  return 'recent';
 }
 
 function appendEventLogBlocks(blocks: ProjectedProseBlock[], groupId: string, lines: string[]) {
@@ -1142,6 +1216,16 @@ function applySidecarEventEffects(
   let nextSessionState = cloneRuntimeSessionState(sessionState);
 
   for (const effect of event.effects ?? []) {
+    if (effect.kind === 'arm_schedule' && effect.args.length >= 1) {
+      const scheduleId = typeof effect.args[0] === 'string' ? effect.args[0] : undefined;
+
+      if (scheduleId && typeof eventContext.systemContext?.clock?.nowMs === 'number') {
+        nextSessionState = setRuntimeSessionValue(nextSessionState, `runtime.schedules.${scheduleId}.armedAtMs`, eventContext.systemContext.clock.nowMs);
+      }
+
+      continue;
+    }
+
     if (effect.kind !== 'set' || effect.args.length < 2) {
       continue;
     }
@@ -1456,6 +1540,18 @@ function resolveRuntimeSystemContext(
   clockSource: RuntimeClockSource | undefined,
   weatherSource: RuntimeWeatherSource | undefined,
 ): RuntimeSystemContext {
+  return resolveBaseRuntimeSystemContext(projectId, project, nodeId, sessionState, systemContext, clockSource, weatherSource);
+}
+
+function resolveBaseRuntimeSystemContext(
+  projectId: string,
+  project: RuntimeProjectRecord,
+  nodeId: string | undefined,
+  sessionState: RuntimeSessionState,
+  systemContext: RuntimeSystemContext | undefined,
+  clockSource: RuntimeClockSource | undefined,
+  weatherSource: RuntimeWeatherSource | undefined,
+): RuntimeSystemContext {
   const clock = systemContext?.clock
     ?? clockSource?.getSnapshot(projectId, nodeId)
     ?? getRuntimeClockSnapshotFromSessionState(sessionState);
@@ -1469,6 +1565,395 @@ function resolveRuntimeSystemContext(
     ...(clock ? { clock } : {}),
     ...(weather ? { weather } : {}),
   };
+}
+
+function applyRuntimeSchedules(
+  project: RuntimeProjectRecord,
+  sessionState: RuntimeSessionState,
+  systemContext: RuntimeSystemContext,
+  nodeId?: string,
+  previousSystemContext?: RuntimeSystemContext,
+): RuntimeSessionState {
+  const schedules = project.timeSettings?.schedules;
+
+  if (!schedules) {
+    return sessionState;
+  }
+
+  let nextState = cloneRuntimeSessionState(sessionState);
+
+  for (const [scheduleId, schedule] of Object.entries(schedules)) {
+    if (!isScheduleActive(project, schedule, sessionState, systemContext, nodeId, previousSystemContext)) {
+      continue;
+    }
+
+    nextState = applyScheduleEffects(nextState, schedule.effects, systemContext, scheduleId);
+  }
+
+  return nextState;
+}
+
+function isScheduleActive(
+  project: RuntimeProjectRecord,
+  schedule: TimeScheduleDefinition,
+  sessionState: RuntimeSessionState,
+  systemContext: RuntimeSystemContext,
+  nodeId?: string,
+  previousSystemContext?: RuntimeSystemContext,
+): boolean {
+  const evaluationNodeIds = resolveScheduleEvaluationNodeIds(project, schedule, nodeId);
+
+  return evaluationNodeIds.some((evaluationNodeId) => {
+    if (schedule.when && !evaluatePredicateReference(schedule.when, project, sessionState, { systemContext })) {
+      return false;
+    }
+
+    if (!matchesScheduleWindow(project, schedule, sessionState, systemContext, evaluationNodeId, previousSystemContext)) {
+      return false;
+    }
+
+    if (schedule.trigger.kind === 'elapsed') {
+      return hasElapsedScheduleReached(schedule, sessionState, systemContext);
+    }
+
+    return matchesScheduleTrigger(project, schedule.trigger, sessionState, systemContext, evaluationNodeId, previousSystemContext);
+  });
+}
+
+function resolveScheduleEvaluationNodeIds(
+  project: RuntimeProjectRecord,
+  schedule: TimeScheduleDefinition,
+  currentNodeId?: string,
+): Array<string | undefined> {
+  const target = schedule.target;
+
+  if (!target) {
+    return [currentNodeId];
+  }
+
+  if (target.nodes?.length) {
+    return Array.from(new Set(target.nodes));
+  }
+
+  if (target.folders?.length) {
+    return Object.entries(project.nodeFoldersById)
+      .filter(([, folders]) => target.folders?.some((folder) => folders.includes(folder)))
+      .map(([candidateNodeId]) => candidateNodeId);
+  }
+
+  if (target.regions?.length) {
+    return Object.entries(project.nodeRegionsById)
+      .filter(([, regionId]) => target.regions?.includes(regionId))
+      .map(([candidateNodeId]) => candidateNodeId);
+  }
+
+  return [currentNodeId];
+}
+
+function matchesScheduleTarget(
+  project: RuntimeProjectRecord,
+  schedule: TimeScheduleDefinition,
+  nodeId?: string,
+): boolean {
+  const target = schedule.target;
+
+  if (!target) {
+    return true;
+  }
+
+  if (target.nodes?.length) {
+    return nodeId ? target.nodes.includes(nodeId) : false;
+  }
+
+  if (target.folders?.length) {
+    if (!nodeId) {
+      return false;
+    }
+
+    const folders = project.nodeFoldersById[nodeId] ?? [];
+    return target.folders.some((folder) => folders.includes(folder));
+  }
+
+  if (target.regions?.length) {
+    const regionId = nodeId ? project.nodeRegionsById[nodeId] : undefined;
+    return typeof regionId === 'string' ? target.regions.includes(regionId) : false;
+  }
+
+  return true;
+}
+
+function matchesScheduleWindow(
+  project: RuntimeProjectRecord,
+  schedule: TimeScheduleDefinition,
+  sessionState: RuntimeSessionState,
+  systemContext: RuntimeSystemContext,
+  nodeId?: string,
+  previousSystemContext?: RuntimeSystemContext,
+): boolean {
+  if (!schedule.activeWindow) {
+    return true;
+  }
+
+  if (schedule.activeWindow.start && !matchesScheduleTrigger(project, schedule.activeWindow.start, sessionState, systemContext, nodeId, previousSystemContext)) {
+    return false;
+  }
+
+  if (schedule.activeWindow.stop && matchesScheduleTrigger(project, schedule.activeWindow.stop, sessionState, systemContext, nodeId, previousSystemContext)) {
+    return false;
+  }
+
+  return true;
+}
+
+function matchesScheduleTrigger(
+  project: RuntimeProjectRecord,
+  trigger: TimeScheduleTriggerDefinition,
+  sessionState: RuntimeSessionState,
+  systemContext: RuntimeSystemContext,
+  nodeId?: string,
+  previousSystemContext?: RuntimeSystemContext,
+): boolean {
+  if (trigger.kind === 'condition') {
+    return evaluatePredicateReference(trigger.predicate, project, sessionState, { systemContext });
+  }
+
+  if (trigger.kind === 'phase') {
+    const activePhaseId = systemContext.clock?.phase;
+    const previousPhaseId = previousSystemContext?.clock?.phase;
+
+    if (trigger.phaseId) {
+      if (trigger.edge === 'enter') {
+        return didEnterScheduledPhase(project, nodeId, trigger.phaseId, previousSystemContext?.clock, systemContext.clock);
+      }
+
+      if (trigger.edge === 'exit') {
+        return previousPhaseId === trigger.phaseId && activePhaseId !== previousPhaseId;
+      }
+
+      return activePhaseId === trigger.phaseId;
+    }
+
+    if (trigger.phaseGroup && activePhaseId) {
+      const currentMatchesGroup = matchesSchedulePhaseGroup(project, nodeId, activePhaseId, trigger.phaseGroup);
+
+      if (trigger.edge === 'enter') {
+        return didEnterScheduledPhaseGroup(project, nodeId, trigger.phaseGroup, previousSystemContext?.clock, systemContext.clock);
+      }
+
+      if (trigger.edge === 'exit') {
+        return matchesSchedulePhaseGroup(project, nodeId, previousPhaseId, trigger.phaseGroup) && !currentMatchesGroup;
+      }
+
+      return currentMatchesGroup;
+    }
+
+    return false;
+  }
+
+  if (trigger.kind === 'clock') {
+    return typeof systemContext.clock?.nowMs === 'number' && typeof trigger.minutes === 'number'
+      ? systemContext.clock.nowMs >= trigger.minutes * 60_000
+      : false;
+  }
+
+  return false;
+}
+
+function matchesSchedulePhaseGroup(
+  project: RuntimeProjectRecord,
+  nodeId: string | undefined,
+  phaseId: string | undefined,
+  phaseGroup: string,
+): boolean {
+  if (!phaseId) {
+    return false;
+  }
+
+  const phaseDefinition = resolveAssignedProjectCalendar(project.timeSettings, {
+    nodeId,
+    nodeFolders: nodeId ? project.nodeFoldersById[nodeId] : undefined,
+    nodeRegion: nodeId ? project.nodeRegionsById[nodeId] : undefined,
+  })?.calendar.phases?.find((phase) => phase.id === phaseId);
+
+  return phaseDefinition?.groups?.includes(phaseGroup) ?? false;
+}
+
+function didEnterScheduledPhase(
+  project: RuntimeProjectRecord,
+  nodeId: string | undefined,
+  phaseId: string,
+  previousClock: RuntimeClockSnapshot | undefined,
+  currentClock: RuntimeClockSnapshot | undefined,
+): boolean {
+  if (currentClock?.phase !== phaseId) {
+    return false;
+  }
+
+  if (previousClock?.phase !== phaseId) {
+    return true;
+  }
+
+  const currentOccurrence = getScheduledPhaseOccurrenceIndex(project, nodeId, phaseId, currentClock.nowMs);
+  const previousOccurrence = getScheduledPhaseOccurrenceIndex(project, nodeId, phaseId, previousClock.nowMs);
+
+  return currentOccurrence !== undefined && previousOccurrence !== undefined && currentOccurrence > previousOccurrence;
+}
+
+function didEnterScheduledPhaseGroup(
+  project: RuntimeProjectRecord,
+  nodeId: string | undefined,
+  phaseGroup: string,
+  previousClock: RuntimeClockSnapshot | undefined,
+  currentClock: RuntimeClockSnapshot | undefined,
+): boolean {
+  const currentPhaseId = currentClock?.phase;
+
+  if (!matchesSchedulePhaseGroup(project, nodeId, currentPhaseId, phaseGroup)) {
+    return false;
+  }
+
+  if (!matchesSchedulePhaseGroup(project, nodeId, previousClock?.phase, phaseGroup)) {
+    return true;
+  }
+
+  const currentOccurrence = getScheduledPhaseOccurrenceIndex(project, nodeId, currentPhaseId, currentClock?.nowMs);
+  const previousOccurrence = getScheduledPhaseOccurrenceIndex(project, nodeId, previousClock?.phase, previousClock?.nowMs);
+
+  return currentOccurrence !== undefined && previousOccurrence !== undefined && currentOccurrence > previousOccurrence;
+}
+
+function getScheduledPhaseOccurrenceIndex(
+  project: RuntimeProjectRecord,
+  nodeId: string | undefined,
+  phaseId: string | undefined,
+  nowMs: number | undefined,
+): number | undefined {
+  if (!phaseId || typeof nowMs !== 'number') {
+    return undefined;
+  }
+
+  const assignedCalendar = resolveAssignedProjectCalendar(project.timeSettings, {
+    nodeId,
+    nodeFolders: nodeId ? project.nodeFoldersById[nodeId] : undefined,
+    nodeRegion: nodeId ? project.nodeRegionsById[nodeId] : undefined,
+  });
+  const phases = assignedCalendar?.calendar.phases;
+
+  if (!phases?.length) {
+    return undefined;
+  }
+
+  const cycleDurationMs = phases.reduce((total, phase) => total + (phase.durationMinutes ?? 0) * 60_000, 0);
+
+  if (cycleDurationMs <= 0) {
+    return undefined;
+  }
+
+  let phaseStartOffsetMs = 0;
+
+  for (const phase of phases) {
+    if (phase.id === phaseId) {
+      return Math.floor((nowMs - phaseStartOffsetMs) / cycleDurationMs);
+    }
+
+    phaseStartOffsetMs += (phase.durationMinutes ?? 0) * 60_000;
+  }
+
+  return undefined;
+}
+
+function syncRuntimeSystemContext(
+  sessionState: RuntimeSessionState,
+  systemContext: RuntimeSystemContext,
+): RuntimeSessionState {
+  let nextState = cloneRuntimeSessionState(sessionState);
+
+  if (systemContext.clock?.phase !== undefined) {
+    nextState = setRuntimeSessionValue(nextState, 'world.time.phase', systemContext.clock.phase);
+  }
+
+  if (systemContext.clock?.cycle !== undefined) {
+    nextState = setRuntimeSessionValue(nextState, 'world.time.cycle', systemContext.clock.cycle);
+  }
+
+  if (systemContext.clock?.nowMs !== undefined) {
+    nextState = setRuntimeSessionValue(nextState, 'world.time.nowMs', systemContext.clock.nowMs);
+  }
+
+  if (systemContext.clock?.source !== undefined) {
+    nextState = setRuntimeSessionValue(nextState, 'world.time.source', systemContext.clock.source);
+  }
+
+  if (systemContext.weather?.kind !== undefined) {
+    nextState = setRuntimeSessionValue(nextState, 'world.weather.kind', systemContext.weather.kind);
+  }
+
+  if (systemContext.weather?.intensity !== undefined) {
+    nextState = setRuntimeSessionValue(nextState, 'world.weather.intensity', systemContext.weather.intensity);
+  }
+
+  if (systemContext.weather?.patternId !== undefined) {
+    nextState = setRuntimeSessionValue(nextState, 'world.weather.patternId', systemContext.weather.patternId);
+  }
+
+  if (systemContext.weather?.stepId !== undefined) {
+    nextState = setRuntimeSessionValue(nextState, 'world.weather.stepId', systemContext.weather.stepId);
+  }
+
+  if (systemContext.weather?.regionId !== undefined) {
+    nextState = setRuntimeSessionValue(nextState, 'world.weather.region', systemContext.weather.regionId);
+  }
+
+  if (systemContext.weather?.source !== undefined) {
+    nextState = setRuntimeSessionValue(nextState, 'world.weather.source', systemContext.weather.source);
+  }
+
+  return nextState;
+}
+
+function hasElapsedScheduleReached(
+  schedule: TimeScheduleDefinition,
+  sessionState: RuntimeSessionState,
+  systemContext: RuntimeSystemContext,
+): boolean {
+  const armedScheduleId = schedule.trigger.scheduleId;
+  const armedAtMs = armedScheduleId ? getRuntimeSessionValue(sessionState, `runtime.schedules.${armedScheduleId}.armedAtMs`) : undefined;
+  const nowMs = systemContext.clock?.nowMs;
+
+  if (typeof armedAtMs !== 'number' || typeof nowMs !== 'number' || typeof schedule.trigger.minutes !== 'number') {
+    return false;
+  }
+
+  return nowMs - armedAtMs >= schedule.trigger.minutes * 60_000;
+}
+
+function applyScheduleEffects(
+  sessionState: RuntimeSessionState,
+  effects: EventEffectDefinition[] | undefined,
+  systemContext: RuntimeSystemContext,
+  scheduleId: string,
+): RuntimeSessionState {
+  let nextState = cloneRuntimeSessionState(sessionState);
+
+  for (const effect of effects ?? []) {
+    if (effect.kind !== 'set' || effect.args.length < 2) {
+      continue;
+    }
+
+    const targetPath = typeof effect.args[0] === 'string' ? effect.args[0] : undefined;
+
+    if (!targetPath) {
+      continue;
+    }
+
+    nextState = setRuntimeSessionValue(nextState, targetPath, toRuntimeSessionValue(effect.args[1]));
+  }
+
+  if (typeof systemContext.clock?.nowMs === 'number') {
+    nextState = setRuntimeSessionValue(nextState, `runtime.schedules.${scheduleId}.appliedAtMs`, systemContext.clock.nowMs);
+  }
+
+  return nextState;
 }
 
 function resolveClockContextValue(path: string, clock: RuntimeClockSnapshot | undefined): RuntimeSessionValue | undefined {
@@ -1530,16 +2015,19 @@ function resolveWeatherContextValue(path: string, weather: RuntimeWeatherSnapsho
 export function getRuntimeClockSnapshotFromSessionState(sessionState: RuntimeSessionState): RuntimeClockSnapshot | undefined {
   const phase = getRuntimeSessionValue(sessionState, 'world.time.phase');
   const cycleValue = getRuntimeSessionValue(sessionState, 'world.time.cycle');
+  const nowMs = getRuntimeSessionValue(sessionState, 'world.time.nowMs');
+  const source = getRuntimeSessionValue(sessionState, 'world.time.source');
   const cycle = Array.isArray(cycleValue) ? cycleValue.filter((entry): entry is string => typeof entry === 'string') : undefined;
 
-  if (typeof phase !== 'string' && !cycle) {
+  if (typeof phase !== 'string' && !cycle && typeof nowMs !== 'number') {
     return undefined;
   }
 
   return {
     phase: typeof phase === 'string' ? phase : undefined,
     cycle,
-    source: 'session',
+    nowMs: typeof nowMs === 'number' ? nowMs : undefined,
+    source: typeof source === 'string' ? source : 'session',
   };
 }
 
@@ -2603,6 +3091,20 @@ function getRecordAliases(record: RuntimeNodeRecord): string[] {
     sourcePathWithoutExtension,
     canonicalizeNodeId(sourcePathWithoutExtension),
   ]));
+}
+
+function getRecordFolderAncestors(record: RuntimeNodeRecord): string[] {
+  const sourcePathWithoutExtension = stripMarkdownExtension(record.sourcePath);
+  const lastSeparatorIndex = sourcePathWithoutExtension.lastIndexOf('/');
+
+  if (lastSeparatorIndex < 0) {
+    return [];
+  }
+
+  const folderPath = sourcePathWithoutExtension.slice(0, lastSeparatorIndex);
+  const segments = folderPath.split('/').filter(Boolean);
+
+  return segments.map((_, index) => segments.slice(0, index + 1).join('/'));
 }
 
 function isGatePassthrough(node: GateObject, direction?: PathDirection): boolean {

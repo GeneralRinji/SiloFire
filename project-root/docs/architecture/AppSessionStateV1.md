@@ -1,10 +1,12 @@
 # App Session State v1
 
-This document is the working reference for browser-only run state that exists above pure runtime projection.
+This document is the working reference for client-side app/session concerns above pure runtime projection.
 
 Use it when changing save and continue flows, recent log behavior, per-node visit state, or route replacement logic in the web app.
 
 It complements Runtime Composition, not replaces it.
+
+For gameplay-facing rules about visible text, recent text, weather, ambient events, restore behavior, and ownership boundaries, see `SessionBehaviorRulesV1.md`.
 
 ## Why This Exists
 
@@ -19,32 +21,44 @@ That includes:
 - node-entry event evaluation
 - projected page selection from authored content
 
-The browser app still needs session state that is not part of authored content itself.
+The browser app still needs client-side state that is not part of authored content itself.
 
 That state had started to accumulate directly inside App.tsx.
 
 This document makes the boundary explicit so future gate and path work does not drift back into ad hoc shell logic.
 
-## Browser-Owned Session State
+## Client-Owned App State
 
-The app session layer owns only run-local state needed to drive the current browser experience:
+The client app/session layer should own only state needed to render and orchestrate the current client experience:
 
-- current project route
-- per-project history stack
-- per-project Area and Gate visit counts
-- per-project Path visit counts
-- per-node recent log entries
-- per-node action attempt counts
-- persisted save snapshots
+- display-only route/view state
+- keyboard and focus handling
+- debug and inspection pane state
+- renderer-local stabilization needed to avoid remounting visible prose unnecessarily
+- subscribed live snapshots mirrored from the server for rendering
 - lightweight UI baselines such as last displayed weather announcement per project
 
-This is browser state because it is about the player session, not about authored node meaning.
+This is client state because it affects presentation and orchestration, not gameplay truth.
 
 Important boundary:
 
-- app-session may remember prior route snapshots for save and restore bookkeeping
-- app-session must not invent navigation semantics such as a browser-history-style `back` fallback
+- the client may cache subscribed snapshots, but those snapshots are mirrors of server truth rather than authority
+- the client must not invent navigation semantics such as a browser-history-style `back` fallback
 - if a control changes location, runtime/authored resolution must say where it goes
+
+## Migration Target
+
+Current code still contains older browser-managed run/session artifacts.
+
+Treat these as migration targets rather than the desired boundary:
+
+- browser-managed history stacks
+- browser-managed visit counts
+- browser-managed action attempt counts
+- browser-managed save/continue authority
+- browser-managed runtime session state
+
+These values affect traversal, projection inputs, or persistence and should move behind a server/runtime session boundary as the architecture continues to shift toward server authority.
 
 ## What Must Stay Out Of The App Session Layer
 
@@ -57,6 +71,10 @@ Do not put these in the app session layer:
 - gate or path `back` destination rules
 - authored visibility rules for weather, time, or ambient systems
 - prose selection rules that belong to runtime interpretation
+- visit-count authority that affects authored prose selection
+- action-attempt authority that affects authored outcomes
+- canonical traversal position or run progression
+- authoritative save/continue persistence
 
 Those belong in runtime helpers or deeper authored/runtime layers where they can be tested without React.
 
@@ -84,7 +102,11 @@ If more run replacement logic appears, prefer extracting it here before adding m
 
 ### saveState.ts
 
-This module owns persisted snapshot policy and local storage serialization.
+This module currently owns persisted snapshot policy and local storage serialization.
+
+That is current implementation, not long-term architectural intent.
+
+Browser-local persistence should be treated as optional convenience tooling rather than the primary authority boundary.
 
 It should stay ignorant of React.
 
@@ -109,35 +131,36 @@ Do not patch traversal bugs with client-side history fallback.
 
 ## Save And Continue Expectations
 
-Save and continue should restore browser session state, not reinterpret authored traversal rules differently.
+Current code saves and restores browser session state.
 
-That means restore should preserve:
+That behavior should be treated as transitional.
+
+The target model is that save and continue restore authoritative session state without requiring the browser to be the source of truth for traversal or authored outcomes.
+
+While the current implementation preserves the following locally, these are the values expected to move to server/session ownership over time:
 
 - active node id
 - path direction
 - path beat index
 - run nonce
-- history
 - visit counts
 - recent log
 - action attempt counts
 - session state
 
-Any normalization of that data should happen in dedicated session helpers rather than inline in React effects.
+Any temporary client-side normalization of that data should happen in dedicated session helpers rather than inline in React effects.
 
 ## Weather Announcement Policy
 
 Weather announcement behavior is app-session policy, not projected node content.
 
-Current rule set:
+The detailed rule set lives in `SessionBehaviorRulesV1.md`.
 
-- initial game start may announce current weather once if the destination node allows weather visibility
-- continue may announce current weather once if the restored node allows weather visibility
-- same-node weather changes may announce when the visible weather state meaningfully changes
-- moving from one weather-visible node to another weather-visible node must not repeat the same weather message if the state is unchanged
-- moving from a weather-hidden node to a weather-visible node may announce the current weather once on re-entry to visibility
+Keep the implementation boundary here simple:
 
-This rule exists because the player is re-entering weather visibility, not because node traversal itself should spam state.
+- do not bake weather prose into authored visible text
+- do not let rerenders or remounts replay weather prose
+- treat weather announcements as recent-log behavior governed by the session behavior contract
 
 ## Projection And Debug UI Boundary
 
@@ -162,3 +185,5 @@ If App.tsx starts doing any of the following more than once, extract a helper:
 - replacing one project's node-scoped entries inside a global map
 - save snapshot shaping
 - start or continue restoration normalization
+
+If App.tsx is deciding visit semantics, attempt semantics, traversal progression, or persisted run truth, move that responsibility out of the client instead of extracting a bigger helper.

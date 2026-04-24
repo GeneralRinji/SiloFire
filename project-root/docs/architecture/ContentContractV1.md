@@ -183,6 +183,35 @@ Current variant kinds:
 
 Those are not the same as missing content.
 
+## Text Lane Policy
+
+The runtime distinguishes between two gameplay-facing text lanes:
+
+- visible text
+- recent text
+
+Current policy:
+
+- authored node entry prose resolves into visible text
+- authored POI result prose resolves into recent text by default
+- authored choice result prose resolves into visible text by default
+- directional entry prose such as `enter:forward` and `enter:backward` resolves into visible text
+- generated traversal/control text resolves into recent text
+- weather and ambient status prose resolve into recent text
+
+At the projection/runtime layer this may be represented by a `lane` field on emitted log entries.
+
+That field is runtime metadata for projected entries.
+
+Sidecar events also support an explicit authored `lane` override with values `visible` or `recent`.
+
+Project time schedules use the same lane vocabulary for authored schedule emissions.
+
+Authoring boundary reminder:
+
+- do not add `lane` directly to normal Area, Gate, or Path markdown
+- use sidecar events or time schedules when authored lane choice is needed
+
 ## Flow Model
 
 Flows are the ordered delivery system.

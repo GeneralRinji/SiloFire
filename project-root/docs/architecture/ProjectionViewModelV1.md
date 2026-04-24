@@ -1,6 +1,6 @@
 # Projection View Model v1
 
-This document is the working reference for the renderer-facing shape used by the current app.
+This document is the working reference for the renderer-facing shape used by the current runtime.
 
 Use it when changing the interpreter, projection layer, renderer, or app shell contracts.
 
@@ -12,6 +12,12 @@ The renderer should not need to know about raw markdown files, parser internals,
 
 It should receive a page-like payload that can be rendered directly.
 
+Projection is renderer-facing, not React-facing.
+
+React may consume this contract, but React does not define it.
+
+Any renderer that can draw the projected result shapes may be used.
+
 ## Responsibility Split
 
 Responsibility split:
@@ -19,7 +25,7 @@ Responsibility split:
 - parser reads handwritten source and normalizes content objects
 - interpreter selects relevant prose, actions, and controls
 - projection turns interpreted data into a renderer-facing page model
-- web runtime handles project discovery, cross-node navigation, recent log augmentation, and keyboard shortcut dispatch
+- runtime/session layers handle project discovery, authoritative navigation, recent log augmentation, and keyboard shortcut dispatch
 - renderer draws the projected page
 
 Projection is intentionally smaller than the full browser runtime.
@@ -114,6 +120,7 @@ Current log shape:
 type ProjectedLogEntry = {
   id: string;
   text: string;
+  lane?: 'visible' | 'recent';
   markers?: ProjectedMarker[];
   blocks?: ProjectedProseBlock[];
 };
@@ -123,8 +130,22 @@ Important behavior:
 
 - projection can expose `recentLog`
 - the browser runtime may also append additional recent log entries after projection
+- runtime-appended log entries may carry a `lane` hint that decides whether they join visible prose or recent text
 - runtime-appended recent log entries may carry lightweight presentation markers such as `fade`
 - runtime-appended recent log entries may also preserve authored block splits so delay markers can stage later lines instead of delaying the whole entry
+
+Current lane behavior:
+
+- `lane: 'visible'` appends the entry into `page.proseBlocks`
+- `lane: 'recent'` appends the entry into `page.recentLog`
+- entries without a lane are treated as `recent` for backward compatibility
+
+Current intended use:
+
+- authored node entry prose belongs in visible text
+- authored action-result prose belongs in visible text by default
+- weather announcements belong in recent text
+- non-dramatic ambient arrival and departure announcements belong in recent text
 
 Weather-specific note:
 
@@ -132,6 +153,10 @@ Weather-specific note:
 - weather announcements belong to app-session/runtime policy above projection
 
 That means recent log is part of the page model, but not necessarily produced only by pure projection.
+
+The `lane` field is renderer/runtime metadata.
+
+It is not currently a direct author-facing markdown field.
 
 Live-update note:
 
@@ -189,6 +214,8 @@ Keep this simple:
 
 The renderer should be able to treat the page model as plain display data.
 
+That remains true whether the renderer is React, another web renderer, a terminal renderer, or a test harness.
+
 It may render:
 
 - title
@@ -210,6 +237,8 @@ Projection should not be responsible for:
 - project folder grouping
 - alias resolution
 - path-direction inference across nodes
-- project history behavior
+- browser history behavior
+- session persistence policy
+- renderer-specific component concerns
 
-Those belong in the browser/runtime layer above projection.
+Those belong in runtime, session, or renderer layers outside projection.

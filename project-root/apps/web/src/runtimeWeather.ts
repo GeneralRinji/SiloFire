@@ -174,6 +174,7 @@ export function buildRuntimeWeatherLogEntry(snapshot: RuntimeWeatherSnapshot | u
   return {
     id: `weather-${Math.random().toString(36).slice(2, 10)}`,
     text: blocks[0]?.text ?? snapshot.kind ?? 'Weather changes.',
+    lane: 'recent',
     blocks,
   };
 }
@@ -233,6 +234,7 @@ export function shouldAnnounceWeatherChange(args: {
   previousNodeId?: string;
   previousSnapshot?: RuntimeWeatherSnapshot;
   snapshot?: RuntimeWeatherSnapshot;
+  existingEntries?: ProjectedLogEntry[];
 }): boolean {
   if (!args.currentNodeId) {
     return false;
@@ -245,11 +247,23 @@ export function shouldAnnounceWeatherChange(args: {
   }
 
   if (!args.previousNodeId) {
-    return false;
+    return shouldAnnounceWeather({
+      reason: 'entry',
+      snapshot: args.snapshot,
+      existingEntries: args.existingEntries,
+    });
   }
 
   if (args.currentNodeId !== args.previousNodeId) {
-    return !buildRuntimeWeatherLogEntry(args.previousSnapshot);
+    if (buildRuntimeWeatherLogEntry(args.previousSnapshot)) {
+      return false;
+    }
+
+    return shouldAnnounceWeather({
+      reason: 'entry',
+      snapshot: args.snapshot,
+      existingEntries: args.existingEntries,
+    });
   }
 
   return hasMeaningfulWeatherChange(args.previousSnapshot, args.snapshot);

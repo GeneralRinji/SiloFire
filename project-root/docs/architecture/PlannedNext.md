@@ -60,11 +60,14 @@ If this file conflicts with current architecture docs or verified code behavior,
 ## Design Notes
 
 - Deno Deploy looks like a plausible hosting target, but the current app is not deploy-ready there as a pure static site because live runtime endpoints currently exist only inside the Vite dev server plugin
+- projection should remain a renderer-facing contract rather than a React-specific contract
+- React should be treated as one renderer implementation rather than the owner of runtime behavior
 - stores should likely exist along a spectrum from very simple to simulation-heavy rather than as one monolithic commerce system
 - unquest and unachievement support may need to preserve reversal, failure, or anti-progression states rather than assuming one-way completion
 - inventory and dropped-item systems should respect server authority if they affect persistence, trade, griefing risk, or multiplayer consistency
 - mini-game state systems should be isolated enough that they can have different rules without contaminating the main runtime model
 - per-project time configuration should avoid coupling one demo's rules to another demo's rules
+- browser-managed history should not be preserved as a gameplay or rendering primitive because it distorts later rendering and traversal behavior
 
 ## Refactor Reminder
 
@@ -74,3 +77,4 @@ When implementing anything in this file:
 2. Put authoritative state on the server by default.
 3. Keep runtime rules testable outside React.
 4. Avoid solving new systems with ad hoc client caches, browser-history fallbacks, or hardcoded component state.
+5. Keep projection renderer-facing and keep renderer implementations replaceable.

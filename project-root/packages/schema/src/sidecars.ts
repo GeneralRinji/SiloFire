@@ -6,6 +6,49 @@ export interface TimePhaseDefinition {
   id: string;
   label?: string;
   durationMinutes?: number;
+  groups?: string[];
+  statusText?: string[];
+}
+
+export type TimeScheduleTriggerKind = 'phase' | 'condition' | 'elapsed' | 'clock';
+
+export interface TimeScheduleTriggerDefinition {
+  kind: TimeScheduleTriggerKind;
+  phaseId?: string;
+  phaseGroup?: string;
+  edge?: 'enter' | 'exit';
+  predicate?: PredicateReference;
+  scheduleId?: string;
+  minutes?: number;
+}
+
+export interface TimeScheduleRepeatDefinition {
+  everyMinutes?: number;
+  count?: number;
+}
+
+export interface TimeScheduleWindowDefinition {
+  start?: TimeScheduleTriggerDefinition;
+  stop?: TimeScheduleTriggerDefinition;
+}
+
+export interface TimeScheduleTargetDefinition {
+  nodes?: string[];
+  folders?: string[];
+  regions?: string[];
+  tags?: string[];
+}
+
+export interface TimeScheduleDefinition {
+  description?: string;
+  trigger: TimeScheduleTriggerDefinition;
+  when?: PredicateReference;
+  repeat?: TimeScheduleRepeatDefinition;
+  activeWindow?: TimeScheduleWindowDefinition;
+  target?: TimeScheduleTargetDefinition;
+  actor?: EventAudienceBranch;
+  lane?: 'visible' | 'recent';
+  effects?: EventEffectDefinition[];
 }
 
 export interface TimeCalendarDefinition {
@@ -18,13 +61,23 @@ export interface TimeCalendarDefinition {
 
 export interface TimeAssignmentsDefinition {
   defaultCalendar?: string;
+  folders?: Record<string, string>;
   regions?: Record<string, string>;
   nodes?: Record<string, string>;
+}
+
+export interface TimeVisibilityDefinition {
+  defaultRecentLog?: boolean;
+  folders?: Record<string, boolean>;
+  regions?: Record<string, boolean>;
+  nodes?: Record<string, boolean>;
 }
 
 export interface ProjectTimeSettingsDefinition {
   calendars?: Record<string, TimeCalendarDefinition>;
   assignments?: TimeAssignmentsDefinition;
+  visibility?: TimeVisibilityDefinition;
+  schedules?: Record<string, TimeScheduleDefinition>;
 }
 
 export interface WeatherStepDefinition {
@@ -113,6 +166,8 @@ export interface ContentNpcDefinition {
   route?: NpcRouteDefinition;
   idle?: NpcIdleDefinition;
   arrivalText?: NpcTextBranch;
+  presenceText?: NpcTextBranch;
+  transitText?: NpcTextBranch;
   departureText?: NpcTextBranch;
   sourcePath?: string;
 }
@@ -125,6 +180,7 @@ export interface EventEffectDefinition {
 export interface ContentEventDefinition {
   id: string;
   trigger: EventTriggerDefinition;
+  lane?: 'visible' | 'recent';
   when?: PredicateReference;
   actor: EventAudienceBranch;
   private?: EventAudienceBranch;

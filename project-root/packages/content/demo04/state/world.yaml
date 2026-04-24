@@ -4,7 +4,8 @@
 
 world:
   time:
-    mode: ambient
+    # This seeds the block-wide fallback clock shape. Folder-assigned calendars
+    # in settings/time.yaml can still override per-node time resolution.
     phase: day
     cycle:
       - day
@@ -18,16 +19,10 @@ world:
     patternId: block_weather
     stepId: clear_soft
 
-  business:
-    building02:
-      open: true
-      closesAtPhase: night
-
-nodes:
-  building01_groundfloor:
-    light: on
-
 objects:
+  streetlamps:
+    on: false
+
   night_light:
     on: false
 
@@ -40,10 +35,15 @@ objects:
   building02_counter_mint:
     available: true
 
+  building03_door:
+    open: true
+
+  building04_morning_paper:
+    available: false
+
 npcs:
   resident_01:
     location: building04_groundfloor
-    activeMode: settled
 
   walker_01:
     location: sidewalk_north

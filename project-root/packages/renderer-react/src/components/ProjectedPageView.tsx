@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { ProjectedAction, ProjectedControl, ProjectedLogEntry, ProjectedMarker, ProjectedProseBlock, ProjectionResult } from '../../../projection/src';
 import { NodeNavigation } from './NodeNavigation';
@@ -6,6 +6,7 @@ import { PageShell } from './PageShell';
 import { getFadePresentation } from './fadeMarker';
 import { buildProseScheduleKey, countInitiallyVisibleBlocks, createScheduledBlocks, ProseBlocks } from './ProseBlocks';
 import { renderRichText } from './renderRichText';
+import { useAutoScrollToBottom } from './useAutoScrollToBottom';
 
 interface ProjectedPageViewProps {
   page: ProjectionResult;
@@ -23,47 +24,11 @@ export function ProjectedPageView({ page, navigationKey, onAction, onControl }: 
       ? page.recentLog.map((entry) => entry.id).join('|')
       : '';
 
-  useLayoutEffect(() => {
-    if (page.kind !== 'page' || !page.recentLog || page.recentLog.length === 0 || !recentLogRef.current) {
-      return;
-    }
-
-    scheduleRecentLogScroll(recentLogRef.current);
-  }, [page.kind, recentLogKey]);
+  useAutoScrollToBottom(recentLogRef.current, page.kind === 'page' && Boolean(page.recentLog && page.recentLog.length > 0), recentLogKey);
 
   useEffect(() => {
     setPageStartTimeMs(Date.now());
   }, [navigationKey]);
-
-  useEffect(() => {
-    if (page.kind !== 'page' || !page.recentLog || page.recentLog.length === 0 || !recentLogRef.current) {
-      return;
-    }
-
-    const recentLogElement = recentLogRef.current;
-    const queueScroll = () => {
-      scheduleRecentLogScroll(recentLogElement);
-    };
-    const resizeObserver = new ResizeObserver(() => {
-      queueScroll();
-    });
-    const mutationObserver = new MutationObserver(() => {
-      queueScroll();
-    });
-
-    resizeObserver.observe(recentLogElement);
-    mutationObserver.observe(recentLogElement, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
-    queueScroll();
-
-    return () => {
-      resizeObserver.disconnect();
-      mutationObserver.disconnect();
-    };
-  }, [page.kind, recentLogKey]);
 
   if (page.kind === 'auto_advance') {
     return (
@@ -106,26 +71,18 @@ export function ProjectedPageView({ page, navigationKey, onAction, onControl }: 
   );
 }
 
-function scrollRecentLogToBottom(element: HTMLUListElement): void {
-  element.scrollTop = element.scrollHeight;
-}
-
-function scheduleRecentLogScroll(element: HTMLUListElement): void {
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      scrollRecentLogToBottom(element);
-    });
-  });
-}
-
 function getNavigationBaseDelayMs(blocks: ProjectedProseBlock[]): number {
-  const scheduledBlocks = createScheduledBlocks(blocks);
+  const scheduledBlocks = createScheduledBlocks(blocks.filter((block) => !isRuntimeLogProseBlock(block)));
 
   if (scheduledBlocks.length === 0) {
     return 0;
   }
 
   return scheduledBlocks[scheduledBlocks.length - 1]?.delayMs ?? 0;
+}
+
+function isRuntimeLogProseBlock(block: ProjectedProseBlock): boolean {
+  return typeof block.groupId === 'string' && block.groupId.startsWith('runtime-log:');
 }
 
 function RecentLogItem({ entry }: { entry: ProjectedLogEntry }) {

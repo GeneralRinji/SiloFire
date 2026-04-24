@@ -1,23 +1,8 @@
 # demo04 building02 event sketch
 #
-# A small regenerative loop: the wrapped mint comes back at dawn if someone took it.
+# A small regenerative loop: the wrapped mint comes back on its authored refill cadence after someone takes it.
 
 events:
-  refill_counter_mint_at_dawn:
-    trigger:
-      kind: enter
-      actor: player
-      nodeId: building02_groundfloor
-
-    when:
-      predicate: counter_mint_can_refill
-
-    actor:
-      - In the thin edge of dawn, a fresh wrapped mint has been set out on the counter again.
-
-    effects:
-      - set: [objects.building02_counter_mint.available, true]
-
   inspect_sample_bowl_when_mint_available:
     trigger:
       kind: poi
@@ -67,7 +52,6 @@ events:
 
     effects:
       - set: [objects.building02_counter_mint.available, false]
-      - set: [objects.building02_counter_mint.last_taken_by, actor.id]
       - set: [objects.building02_counter_mint.last_taken_phase, world.time.phase]
 
   take_counter_mint_when_empty:

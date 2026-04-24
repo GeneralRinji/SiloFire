@@ -3,21 +3,178 @@
 # This is project-scoped configuration, not event logic.
 
 calendars:
+  # Fast exterior cadence for the block itself.
   diorama_block:
-    preset: earth_like_4phase
-    minutesPerPhase: 1
-
-  dawn_archive:
-    preset: custom
     phases:
-      - id: silver_dawn
+      - id: day
+        durationMinutes: 2
+        statusText:
+          - Daylight flattens the block into a tidy row of surfaces and reflections.
+      - id: dusk
         durationMinutes: 1
-      - id: long_glow
+        statusText:
+          - The light starts going bronze across the block.
+      - id: night
+        durationMinutes: 2
+        statusText:
+          - The block turns reflective under the lamps.
+      - id: dawn
         durationMinutes: 1
-      - id: blue_dark
+        statusText:
+          - First light returns in thin blue stages across the block.
+
+  # Example alternate cadence for this small demo subtree.
+  interior_longform:
+    # Uses authored per-phase durations; this is an example calendar, not a global rule.
+    phases:
+      - id: day
+        durationMinutes: 2
+        statusText:
+          - Daylight settles softly through the front room and across the stair.
+      - id: dusk
         durationMinutes: 1
+        statusText:
+          - Dusk gathers in the window glass and along the edges of the room.
+      - id: night
+        durationMinutes: 2
+        statusText:
+          - Night leaves the room quiet except for the street glow at the window.
+      - id: dawn
+        durationMinutes: 1
+        statusText:
+          - Dawn reaches the room in a pale wash before the block is fully awake.
 
 assignments:
   defaultCalendar: diorama_block
-  regions:
-    diorama_block: diorama_block
+  folders:
+    # Example folder inheritance: anything under diorama/... uses this calendar
+    # unless a deeper folder or node-specific assignment overrides it.
+    diorama: diorama_block
+    # Overrides the block-wide default for nodes under the moved building subtree.
+    diorama/block/building: interior_longform
+
+visibility:
+  defaultRecentLog: false
+  folders:
+    diorama: true
+
+
+schedules:
+  sidewalk_north_streetlamps_on:
+    description: Example recurring dusk transition for the north sidewalk lamps.
+    trigger:
+      kind: phase
+      phaseId: dusk
+      edge: enter
+    target:
+      nodes:
+        - sidewalk_north
+      tags:
+        - streetlight
+    actor:
+      - One by one, the streetlamps along the curb flick on.
+    lane: recent
+    effects:
+      - set: [objects.streetlamps.on, true]
+
+  sidewalk_north_streetlamps_off:
+    description: Example recurring dawn transition for the north sidewalk lamps.
+    trigger:
+      kind: phase
+      phaseId: dawn
+      edge: enter
+    target:
+      nodes:
+        - sidewalk_north
+      tags:
+        - streetlight
+    actor:
+      - The streetlamps blink off and give the block back to the morning light.
+    lane: recent
+    effects:
+      - set: [objects.streetlamps.on, false]
+
+  building02_counter_mint_refill_day:
+    description: Refill the wrapped mint when day comes around again after a day pickup.
+    trigger:
+      kind: phase
+      phaseId: day
+      edge: enter
+    when:
+      predicate: counter_mint_taken_in_day
+    target:
+      nodes:
+        - building02_groundfloor
+    effects:
+      - set: [objects.building02_counter_mint.available, true]
+
+  building02_counter_mint_refill_dusk:
+    description: Refill the wrapped mint when dusk comes around again after a dusk pickup.
+    trigger:
+      kind: phase
+      phaseId: dusk
+      edge: enter
+    when:
+      predicate: counter_mint_taken_in_dusk
+    target:
+      nodes:
+        - building02_groundfloor
+    effects:
+      - set: [objects.building02_counter_mint.available, true]
+
+  building02_counter_mint_refill_night:
+    description: Refill the wrapped mint when night comes around again after a night pickup.
+    trigger:
+      kind: phase
+      phaseId: night
+      edge: enter
+    when:
+      predicate: counter_mint_taken_in_night
+    target:
+      nodes:
+        - building02_groundfloor
+    effects:
+      - set: [objects.building02_counter_mint.available, true]
+
+  building02_counter_mint_refill_dawn:
+    description: Refill the wrapped mint when dawn comes around again after a dawn pickup.
+    trigger:
+      kind: phase
+      phaseId: dawn
+      edge: enter
+    when:
+      predicate: counter_mint_taken_in_dawn
+    target:
+      nodes:
+        - building02_groundfloor
+    effects:
+      - set: [objects.building02_counter_mint.available, true]
+
+  building04_morning_paper_window:
+    description: Example morning delivery window for the doormat paper.
+    trigger:
+      kind: phase
+      phaseId: dawn
+      edge: enter
+    activeWindow:
+      stop:
+        kind: phase
+        phaseId: day
+        edge: enter
+    target:
+      folders:
+        - diorama/block/building/building04
+    effects:
+      - set: [objects.building04_morning_paper.available, true]
+
+  building04_morning_paper_clear_day:
+    description: Clear the doormat paper once the morning window gives way to day.
+    trigger:
+      kind: phase
+      phaseId: day
+      edge: enter
+    target:
+      folders:
+        - diorama/block/building/building04
+    effects:
+      - set: [objects.building04_morning_paper.available, false]

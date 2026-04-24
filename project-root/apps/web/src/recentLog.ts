@@ -1,7 +1,6 @@
 import type { ProjectedLogEntry } from '../../../packages/projection/src';
 
 const MAX_RECENT_LOG_ENTRIES = 8;
-export const RECENT_LOG_DUPLICATE_WINDOW_MS = 2000;
 
 export type AppRecentLogEntry = ProjectedLogEntry & {
   createdAt: number;
@@ -17,12 +16,6 @@ export function appendLogEntry(
   }
 
   const entries = existingEntries ?? [];
-  const lastEntry = entries[entries.length - 1];
-
-  if (lastEntry?.text === nextEntry.text && now - lastEntry.createdAt < RECENT_LOG_DUPLICATE_WINDOW_MS) {
-    return entries;
-  }
-
   const appendedEntries = [...entries, { ...nextEntry, createdAt: now }];
 
   if (appendedEntries.length <= MAX_RECENT_LOG_ENTRIES) {

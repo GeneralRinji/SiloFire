@@ -13,9 +13,15 @@ import type {
   PredicateReference,
   ProjectWeatherSettingsDefinition,
   ProjectTimeSettingsDefinition,
+  TimeScheduleDefinition,
+  TimeScheduleRepeatDefinition,
+  TimeScheduleTargetDefinition,
+  TimeScheduleTriggerDefinition,
+  TimeScheduleWindowDefinition,
   TimeAssignmentsDefinition,
   TimeCalendarDefinition,
   TimePhaseDefinition,
+  TimeVisibilityDefinition,
   WeatherAssignmentsDefinition,
   WeatherPatternDefinition,
   WeatherStepDefinition,
@@ -43,6 +49,8 @@ export function parseTimeSettingsSidecar(source: string, sourcePath?: string): N
     value: errors.length > 0 ? undefined : {
       calendars: parseTimeCalendars(settingsObject.calendars, errors),
       assignments: parseTimeAssignments(settingsObject.assignments, errors),
+      visibility: parseTimeVisibility(settingsObject.visibility, errors),
+      schedules: parseTimeSchedules(settingsObject.schedules, errors),
     },
     warnings,
     errors,
@@ -174,6 +182,7 @@ function parseEventDefinition(
   return {
     id: eventId,
     trigger,
+    lane: parseEventLane(eventObject.lane, eventId, errors),
     when,
     actor,
     private: parseEventBranch(eventObject.private, `event ${eventId} private`, errors),
@@ -182,6 +191,25 @@ function parseEventDefinition(
     effects: parseEffects(eventObject.effects, eventId, errors),
     sourcePath,
   };
+}
+
+function parseEventLane(
+  value: ParsedFrontMatterValue | undefined,
+  eventId: string,
+  errors: NormalizeResult<ContentEventDefinition[]>['errors'],
+): 'visible' | 'recent' | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const lane = asString(value);
+
+  if (lane === 'visible' || lane === 'recent') {
+    return lane;
+  }
+
+  errors.push({ message: `Expected lane to be visible or recent for event ${eventId}.` });
+  return undefined;
 }
 
 function parseEventOffer(
@@ -319,6 +347,29 @@ function parseEventBranch(
   };
 }
 
+
+  function parseOptionalAudienceBranch(
+    value: ParsedFrontMatterValue | undefined,
+    label: string,
+    errors: Array<{ message: string }>,
+  ): EventAudienceBranch | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    if (Array.isArray(value)) {
+      const text = asStringArray(value);
+
+      if (!text || text.length === 0) {
+        errors.push({ message: `Expected text array for ${label}.` });
+        return undefined;
+      }
+
+      return { text };
+    }
+
+    return parseEventBranch(value, label, errors);
+  }
 function parseEffects(
   value: ParsedFrontMatterValue | undefined,
   eventId: string,
@@ -424,8 +475,175 @@ function parseTimePhases(
       id,
       label: asString(phaseObject.label),
       durationMinutes: asNumber(phaseObject.durationMinutes),
+      groups: asStringArray(phaseObject.groups),
+      statusText: asStringArray(phaseObject.statusText),
     }];
   });
+}
+
+function parseTimeSchedules(
+  value: ParsedFrontMatterValue | undefined,
+  errors: NormalizeResult<ProjectTimeSettingsDefinition>['errors'],
+): Record<string, TimeScheduleDefinition> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const schedulesObject = asObject(value);
+
+  if (!schedulesObject) {
+    errors.push({ message: 'Expected schedules object for time settings.' });
+    return undefined;
+  }
+
+  return Object.entries(schedulesObject).reduce<Record<string, TimeScheduleDefinition>>((accumulator, [scheduleId, rawSchedule]) => {
+    const scheduleObject = asObject(rawSchedule);
+
+    if (!scheduleObject) {
+      errors.push({ message: `Expected object definition for schedule ${scheduleId}.` });
+      return accumulator;
+    }
+
+    const trigger = parseTimeScheduleTrigger(scheduleObject.trigger, `schedule ${scheduleId}`, errors);
+
+    if (!trigger) {
+      return accumulator;
+    }
+
+    accumulator[scheduleId] = {
+      description: asString(scheduleObject.description),
+      trigger,
+      when: parsePredicateReference(scheduleObject.when, `schedule ${scheduleId} when`, errors),
+      repeat: parseTimeScheduleRepeat(scheduleObject.repeat, scheduleId, errors),
+      activeWindow: parseTimeScheduleWindow(scheduleObject.activeWindow, scheduleId, errors),
+      target: parseTimeScheduleTarget(scheduleObject.target, scheduleId, errors),
+        actor: parseOptionalAudienceBranch(scheduleObject.actor, `schedule ${scheduleId} actor`, errors),
+      lane: parseEventLane(scheduleObject.lane, scheduleId, errors),
+      effects: parseEffects(scheduleObject.effects, scheduleId, errors),
+    };
+    return accumulator;
+  }, {});
+}
+
+function parseTimeScheduleTrigger(
+  value: ParsedFrontMatterValue | undefined,
+  label: string,
+  errors: NormalizeResult<ProjectTimeSettingsDefinition>['errors'],
+): TimeScheduleTriggerDefinition | undefined {
+  const objectValue = asObject(value);
+
+  if (!objectValue) {
+    errors.push({ message: `Expected trigger object for ${label}.` });
+    return undefined;
+  }
+
+  const kind = asString(objectValue.kind);
+
+  if (kind !== 'phase' && kind !== 'condition' && kind !== 'elapsed' && kind !== 'clock') {
+    errors.push({ message: `Expected trigger.kind to be phase, condition, elapsed, or clock for ${label}.` });
+    return undefined;
+  }
+
+  return {
+    kind,
+    phaseId: asString(objectValue.phaseId),
+    phaseGroup: asString(objectValue.phaseGroup),
+    edge: parseTimeScheduleTriggerEdge(objectValue.edge, label, errors),
+    predicate: parsePredicateReference(objectValue.predicate ?? objectValue.when, `${label} trigger`, errors),
+    scheduleId: asString(objectValue.scheduleId),
+    minutes: asNumber(objectValue.minutes),
+  };
+}
+
+function parseTimeScheduleTriggerEdge(
+  value: ParsedFrontMatterValue | undefined,
+  label: string,
+  errors: NormalizeResult<ProjectTimeSettingsDefinition>['errors'],
+): 'enter' | 'exit' | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const edge = asString(value);
+
+  if (edge === 'enter' || edge === 'exit') {
+    return edge;
+  }
+
+  errors.push({ message: `Expected trigger.edge to be enter or exit for ${label}.` });
+  return undefined;
+}
+
+function parseTimeScheduleRepeat(
+  value: ParsedFrontMatterValue | undefined,
+  scheduleId: string,
+  errors: NormalizeResult<ProjectTimeSettingsDefinition>['errors'],
+): TimeScheduleRepeatDefinition | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const repeatObject = asObject(value);
+
+  if (!repeatObject) {
+    errors.push({ message: `Expected repeat object for schedule ${scheduleId}.` });
+    return undefined;
+  }
+
+  return {
+    everyMinutes: asNumber(repeatObject.everyMinutes),
+    count: asNumber(repeatObject.count),
+  };
+}
+
+function parseTimeScheduleWindow(
+  value: ParsedFrontMatterValue | undefined,
+  scheduleId: string,
+  errors: NormalizeResult<ProjectTimeSettingsDefinition>['errors'],
+): TimeScheduleWindowDefinition | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const windowObject = asObject(value);
+
+  if (!windowObject) {
+    errors.push({ message: `Expected activeWindow object for schedule ${scheduleId}.` });
+    return undefined;
+  }
+
+  return {
+      start: windowObject.start === undefined
+        ? undefined
+        : parseTimeScheduleTrigger(windowObject.start, `schedule ${scheduleId} activeWindow.start`, errors),
+      stop: windowObject.stop === undefined
+        ? undefined
+        : parseTimeScheduleTrigger(windowObject.stop, `schedule ${scheduleId} activeWindow.stop`, errors),
+  };
+}
+
+function parseTimeScheduleTarget(
+  value: ParsedFrontMatterValue | undefined,
+  scheduleId: string,
+  errors: NormalizeResult<ProjectTimeSettingsDefinition>['errors'],
+): TimeScheduleTargetDefinition | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const targetObject = asObject(value);
+
+  if (!targetObject) {
+    errors.push({ message: `Expected target object for schedule ${scheduleId}.` });
+    return undefined;
+  }
+
+  return {
+    nodes: asStringArray(targetObject.nodes),
+    folders: asStringArray(targetObject.folders),
+    regions: asStringArray(targetObject.regions),
+    tags: asStringArray(targetObject.tags),
+  };
 }
 
 function parseTimeAssignments(
@@ -445,8 +663,32 @@ function parseTimeAssignments(
 
   return {
     defaultCalendar: asString(assignmentsObject.defaultCalendar),
+    folders: asStringRecord(assignmentsObject.folders, 'assignments.folders', errors),
     regions: asStringRecord(assignmentsObject.regions, 'assignments.regions', errors),
     nodes: asStringRecord(assignmentsObject.nodes, 'assignments.nodes', errors),
+  };
+}
+
+function parseTimeVisibility(
+  value: ParsedFrontMatterValue | undefined,
+  errors: NormalizeResult<ProjectTimeSettingsDefinition>['errors'],
+): TimeVisibilityDefinition | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const visibilityObject = asObject(value);
+
+  if (!visibilityObject) {
+    errors.push({ message: 'Expected visibility object for time settings.' });
+    return undefined;
+  }
+
+  return {
+    defaultRecentLog: asBoolean(visibilityObject.defaultRecentLog),
+    folders: asBooleanRecord(visibilityObject.folders, 'time.visibility.folders', errors),
+    regions: asBooleanRecord(visibilityObject.regions, 'time.visibility.regions', errors),
+    nodes: asBooleanRecord(visibilityObject.nodes, 'time.visibility.nodes', errors),
   };
 }
 
@@ -739,6 +981,8 @@ export function parseNpcSidecar(source: string, sourcePath?: string): NormalizeR
       route: parseNpcRoute(parsed.value.route, errors),
       idle: parseNpcIdle(parsed.value.idle, errors),
       arrivalText: parseNpcTextBranch(parsed.value.arrivalText, 'arrivalText', errors),
+      presenceText: parseNpcTextBranch(parsed.value.presenceText, 'presenceText', errors),
+      transitText: parseNpcTextBranch(parsed.value.transitText, 'transitText', errors),
       departureText: parseNpcTextBranch(parsed.value.departureText, 'departureText', errors),
       sourcePath,
     },

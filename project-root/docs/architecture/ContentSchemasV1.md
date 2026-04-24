@@ -14,6 +14,12 @@ Use this document to answer:
 - which literal values are currently allowed
 - which shape differences exist between Area, Path, and Gate
 
+Important scope note:
+
+- this file describes the node object families themselves
+- stateful behavior such as predicates, sidecar `when` conditions, authored `effects`, and project time or weather schedules lives in sidecar files rather than inside Area, Gate, or Path markdown
+- after this file, read `SourceFormatV1.md`, `ContentContractV1.md`, and `ContentAuthoringGuideV1.md` before asking an AI to draft stateful content
+
 Use the other v1 docs after this one for source-format examples, traversal semantics, and authoring style.
 
 ## Purpose
@@ -28,6 +34,65 @@ They exist to support:
 - lightweight authored interaction
 
 The runtime is intentionally simple.
+
+The current authoring model is split:
+
+- node markdown defines places, thresholds, traversal, and prose
+- sidecars define stateful rules, predicates, seeded world state, and project-scoped time or weather behavior
+
+Current sidecar examples live in:
+
+- `packages/content/demo04/diorama/block/building/building01/events.yaml`
+- `packages/content/demo04/diorama/block/building/building02/events.yaml`
+- `packages/content/demo04/diorama/npcs/walker_01.yaml`
+- `packages/content/demo04/diorama/predicates/project.yaml`
+- `packages/content/demo04/state/world.yaml`
+- `packages/content/demo04/settings/time.yaml`
+- `packages/content/demo04/settings/weather.yaml`
+
+## Ambient NPC Sidecars
+
+Ambient NPCs are currently authored in sidecar YAML files rather than in Area, Gate, or Path markdown.
+
+Current example:
+
+- `packages/content/demo04/diorama/npcs/walker_01.yaml`
+
+Current roaming walker fields are:
+
+- `id`
+- optional `displayName`
+- optional `role`
+- `location`
+- optional `predicates`
+- optional `route`
+- optional `idle`
+- optional `arrivalText`
+- optional `presenceText`
+- optional `transitText`
+- optional `departureText`
+
+Current `route` fields are:
+
+- `mode`
+- `dwellSeconds`
+- `moveSeconds`
+- `steps`
+
+Current `route.steps` entries include:
+
+- `nodeId`
+
+Use these sidecars for ambient roaming entities whose movement and recent-text status lines are runtime-driven.
+
+NPC sidecars may also include local predicate helpers for NPC-authored behavior.
+
+Current practical rule:
+
+- use local `predicates` for NPC-specific mode selection and helper conditions
+- use `self.<field>` to read fields from the current NPC record when the runtime is evaluating that NPC's authored behavior
+- use `self.<predicate_name>` when one NPC-local predicate references another NPC-local predicate
+- keep project-wide predicates in shared predicate sidecars rather than duplicating them per NPC
 
 ## Shared Fields
 

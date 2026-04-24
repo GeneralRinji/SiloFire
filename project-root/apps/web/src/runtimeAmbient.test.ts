@@ -32,6 +32,8 @@ test('ambient npc route lingers then moves then reaches the next node', () => {
   assert.equal(atStart?.previousNodeId, 'sidewalk_north');
   assert.equal(atStart?.nextNodeId, 'sidewalk_north');
   assert.equal(atStart?.behavior, 'linger');
+  assert.deepEqual(atStart?.presenceText, []);
+  assert.deepEqual(atStart?.transitText, []);
   assert.equal(whileMoving?.nodeId, undefined);
   assert.equal(whileMoving?.previousNodeId, 'sidewalk_north');
   assert.equal(whileMoving?.nextNodeId, 'sidewalk_east');
@@ -58,6 +60,8 @@ test('ambient snapshot uses seeded npc route index and exposes all route npcs', 
         ],
       },
       arrivalText: { shared: ['arrive'] },
+      presenceText: { shared: ['here'] },
+      transitText: { shared: ['between'] },
       departureText: { shared: ['depart'] },
     },
   }, 0, undefined, {
@@ -72,6 +76,31 @@ test('ambient snapshot uses seeded npc route index and exposes all route npcs', 
   assert.equal(snapshot.npcs[0]?.previousNodeId, 'sidewalk_east');
   assert.equal(snapshot.npcs[0]?.nextNodeId, 'sidewalk_east');
   assert.equal(snapshot.npcs[0]?.displayName, 'Block Walker');
+  assert.deepEqual(snapshot.npcs[0]?.presenceText, ['here']);
+  assert.deepEqual(snapshot.npcs[0]?.transitText, ['between']);
+});
+
+test('ambient npc route is deterministic for the same timestamp without a first-observation anchor', () => {
+  const npc = {
+    id: 'walker_01',
+    displayName: 'Block Walker',
+    route: {
+      mode: 'loop',
+      dwellSeconds: 10,
+      moveSeconds: 5,
+      steps: [
+        { nodeId: 'sidewalk_north' },
+        { nodeId: 'sidewalk_east' },
+      ],
+    },
+  };
+
+  const first = resolveRuntimeAmbientNpcSnapshot(npc, 20_000, new Map([['walker_01', 25_000]]), { routeIndex: 0 });
+  const second = resolveRuntimeAmbientNpcSnapshot(npc, 20_000, new Map([['walker_01', 0]]), { routeIndex: 0 });
+
+  assert.deepEqual(first, second);
+  assert.equal(first?.nodeId, 'sidewalk_east');
+  assert.equal(first?.behavior, 'linger');
 });
 
 test('ambient stream url targets the shared runtime endpoint', () => {

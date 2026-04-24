@@ -14,6 +14,8 @@ export interface RuntimeAmbientNpcSnapshot {
   nextNodeId?: string;
   behavior: 'linger' | 'move';
   arrivalText: string[];
+  presenceText: string[];
+  transitText: string[];
   departureText: string[];
 }
 
@@ -77,13 +79,13 @@ export function buildRuntimeAmbientStreamUrl(projectId: string): string {
 export function resolveRuntimeAmbientSnapshot(
   npcDefinitionsById: Record<string, ContentNpcDefinition>,
   nowMs: number,
-  anchorMsByNpcId?: Map<string, number>,
+  _anchorMsByNpcId?: Map<string, number>,
   stateSeedsByNpcId?: Record<string, RuntimeAmbientNpcStateSeed>,
 ): RuntimeAmbientSnapshot {
   return {
     nowMs,
     npcs: Object.values(npcDefinitionsById)
-      .map((npc) => resolveRuntimeAmbientNpcSnapshot(npc, nowMs, anchorMsByNpcId, stateSeedsByNpcId?.[npc.id]))
+      .map((npc) => resolveRuntimeAmbientNpcSnapshot(npc, nowMs, undefined, stateSeedsByNpcId?.[npc.id]))
       .filter((npc): npc is RuntimeAmbientNpcSnapshot => Boolean(npc)),
   };
 }
@@ -91,7 +93,7 @@ export function resolveRuntimeAmbientSnapshot(
 export function resolveRuntimeAmbientNpcSnapshot(
   npc: ContentNpcDefinition,
   nowMs: number,
-  anchorMsByNpcId?: Map<string, number>,
+  _anchorMsByNpcId?: Map<string, number>,
   stateSeed?: RuntimeAmbientNpcStateSeed,
 ): RuntimeAmbientNpcSnapshot | undefined {
   const route = npc.route;
@@ -111,13 +113,14 @@ export function resolveRuntimeAmbientNpcSnapshot(
       nextNodeId: pausedNodeId,
       behavior: 'linger',
       arrivalText: npc.arrivalText?.shared ?? [],
+      presenceText: npc.presenceText?.shared ?? [],
+      transitText: npc.transitText?.shared ?? [],
       departureText: npc.departureText?.shared ?? [],
     };
   }
 
   const dwellMs = normalizeSeconds(route.dwellSeconds, DEFAULT_ROUTE_DWELL_SECONDS) * 1000;
   const moveMs = normalizeSeconds(route.moveSeconds, DEFAULT_ROUTE_MOVE_SECONDS) * 1000;
-  const anchorMs = resolveNpcAnchorMs(npc.id, nowMs, anchorMsByNpcId);
   const startIndex = resolveNpcStartIndex(route.steps, stateSeed);
   const segmentDurationMs = dwellMs + moveMs;
   const totalDurationMs = segmentDurationMs * route.steps.length;
@@ -126,7 +129,7 @@ export function resolveRuntimeAmbientNpcSnapshot(
     return undefined;
   }
 
-  const elapsedMs = Math.max(0, nowMs - anchorMs);
+  const elapsedMs = Math.max(0, nowMs);
   const cycleOffsetMs = elapsedMs % totalDurationMs;
   const segmentIndex = Math.floor(cycleOffsetMs / segmentDurationMs);
   const segmentOffsetMs = cycleOffsetMs % segmentDurationMs;
@@ -143,28 +146,10 @@ export function resolveRuntimeAmbientNpcSnapshot(
     nextNodeId: isLingering ? activeStep?.nodeId : nextStep?.nodeId,
     behavior: isLingering ? 'linger' : 'move',
     arrivalText: npc.arrivalText?.shared ?? [],
+    presenceText: npc.presenceText?.shared ?? [],
+    transitText: npc.transitText?.shared ?? [],
     departureText: npc.departureText?.shared ?? [],
   };
-}
-
-function resolveNpcAnchorMs(
-  npcId: string,
-  nowMs: number,
-  anchorMsByNpcId: Map<string, number> | undefined,
-): number {
-  if (!anchorMsByNpcId) {
-    return 0;
-  }
-
-  const existingAnchor = anchorMsByNpcId.get(npcId);
-
-  if (existingAnchor !== undefined) {
-    return existingAnchor;
-  }
-
-  const nextAnchor = nowMs;
-  anchorMsByNpcId.set(npcId, nextAnchor);
-  return nextAnchor;
 }
 
 function resolveNpcStartIndex(

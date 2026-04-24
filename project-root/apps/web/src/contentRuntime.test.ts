@@ -6,7 +6,8 @@ import { relative, resolve } from 'node:path';
 import { createContentRuntime, createRuntimeForContentFiles } from './contentRuntimeCore';
 import { findMatchingShortcut } from './keyboardShortcuts';
 import { buildProjectedPageRenderKey, createStableProjectedPageResolver } from './pageSelection';
-import { appendLogEntry, createRecentLogEntries, RECENT_LOG_DUPLICATE_WINDOW_MS } from './recentLog';
+import { appendLogEntry, createRecentLogEntries } from './recentLog';
+import { resolveProjectClockSnapshot } from './runtimeClock';
 
 const projectRoot = resolve(__dirname, '..', '..', '..');
 const contentFiles = createTestFixtureProjectFiles();
@@ -395,6 +396,12 @@ endpoints:
   default_world:
     preset: earth_like_4phase
     minutesPerPhase: 60
+    phases:
+      - id: day
+        groups:
+          - daylike
+        statusText:
+          - The station day cycle is in full swing.
 
   moon_colony:
     preset: custom
@@ -410,14 +417,128 @@ assignments:
     system: default_world
   nodes:
     room_01: moon_colony
+
+schedules:
+  streetlamps_at_dusk:
+    description: Turn the north sidewalk streetlamps on at dusk.
+    trigger:
+      kind: phase
+      phaseId: dusk
+      edge: enter
+    repeat:
+      everyMinutes: 6
+    target:
+      nodes:
+        - sidewalk_north
+      tags:
+        - streetlight
+    actor:
+      - One by one, the streetlamps along the curb flick on.
+    lane: recent
+    effects:
+      - set: [objects.streetlamps.on, true]
+
+  counter_mint_refill:
+    description: Refill the sample bowl when day comes around again after a day pickup.
+    trigger:
+      kind: phase
+      phaseId: day
+      edge: enter
+    when:
+      predicate: mint_taken_in_day
+    target:
+      nodes:
+        - room_01
+    effects:
+      - set: [objects.building02_counter_mint.available, true]
+
+  morning_paper_window:
+    description: Drop a paper at dawn and clear it later in the morning.
+    trigger:
+      kind: phase
+      phaseGroup: dawnlike
+      edge: enter
+    activeWindow:
+      stop:
+        kind: phase
+        phaseId: day
+        edge: enter
+    target:
+      folders:
+        - diorama/building04
+    effects:
+      - set: [objects.building04_morning_paper.available, true]
+
+visibility:
+  defaultRecentLog: false
+  folders:
+    station: true
+  nodes:
+    sidewalk_north: true
 `,
   }, { validateProjects: true });
 
   assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.calendars?.default_world?.preset, 'earth_like_4phase');
   assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.calendars?.default_world?.minutesPerPhase, 60);
+  assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.calendars?.default_world?.phases?.[0]?.groups?.[0], 'daylike');
+  assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.calendars?.default_world?.phases?.[0]?.statusText?.[0], 'The station day cycle is in full swing.');
   assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.calendars?.moon_colony?.phases?.[0]?.id, 'silver_dawn');
   assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.assignments?.defaultCalendar, 'default_world');
   assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.assignments?.nodes?.room_01, 'moon_colony');
+  assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.schedules?.streetlamps_at_dusk?.trigger.phaseId, 'dusk');
+  assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.schedules?.streetlamps_at_dusk?.target?.tags?.[0], 'streetlight');
+  assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.schedules?.counter_mint_refill?.trigger.kind, 'phase');
+  assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.schedules?.counter_mint_refill?.trigger.phaseId, 'day');
+  assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.schedules?.counter_mint_refill?.when?.predicate, 'mint_taken_in_day');
+  assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.schedules?.morning_paper_window?.activeWindow?.stop?.phaseId, 'day');
+  assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.visibility?.folders?.station, true);
+  assert.equal(runtimeWithTimeSettings.timecfg?.timeSettings?.visibility?.nodes?.sidewalk_north, true);
+});
+
+test('demo04 time settings can assign an example subtree calendar by source-path inheritance', () => {
+  const runtimeWithDemo04 = createRuntimeForContentFiles(loadProjectFiles('demo04'));
+  const project = runtimeWithDemo04.demo04;
+
+  assert.equal(project?.timeSettings?.assignments?.folders?.diorama, 'diorama_block');
+  assert.equal(project?.timeSettings?.assignments?.folders?.['diorama/block/building'], 'interior_longform');
+
+  const building01Snapshot = project
+    ? resolveProjectClockSnapshot({
+      projectId: 'demo04',
+      timeSettings: project.timeSettings,
+      defaultClock: project.defaultClock,
+      nodeFoldersById: project.nodeFoldersById,
+      nodeRegionsById: project.nodeRegionsById,
+    }, 0, undefined, 'building01_groundfloor')
+    : undefined;
+  const building04Snapshot = project
+    ? resolveProjectClockSnapshot({
+      projectId: 'demo04',
+      timeSettings: project.timeSettings,
+      defaultClock: project.defaultClock,
+      nodeFoldersById: project.nodeFoldersById,
+      nodeRegionsById: project.nodeRegionsById,
+    }, 0, undefined, 'building04_groundfloor')
+    : undefined;
+  const sidewalkSnapshot = project
+    ? resolveProjectClockSnapshot({
+      projectId: 'demo04',
+      timeSettings: project.timeSettings,
+      defaultClock: project.defaultClock,
+      nodeFoldersById: project.nodeFoldersById,
+      nodeRegionsById: project.nodeRegionsById,
+    }, 0, undefined, 'sidewalk_north')
+    : undefined;
+
+  assert.equal(building01Snapshot?.calendarId, 'interior_longform');
+  assert.equal(building01Snapshot?.phase, 'day');
+  assert.equal(building01Snapshot?.nextPhaseInMs, 120_000);
+  assert.equal(building04Snapshot?.calendarId, 'interior_longform');
+  assert.equal(building04Snapshot?.phase, 'day');
+  assert.equal(building04Snapshot?.nextPhaseInMs, 120_000);
+  assert.equal(sidewalkSnapshot?.calendarId, 'diorama_block');
+  assert.equal(sidewalkSnapshot?.phase, 'day');
+  assert.equal(sidewalkSnapshot?.nextPhaseInMs, 120_000);
 });
 
 test('playable demos surface single-save title screen config from authored markdown', () => {
@@ -2396,6 +2517,7 @@ players:
 
   assert.equal(outcome.nextNodeId, undefined);
   assert.equal(outcome.logEntry?.text, 'You take the vase and turn it over in your hands.');
+  assert.equal(outcome.logEntry?.lane, 'recent');
   assert.deepEqual(outcome.logEntry?.blocks?.map((block) => ({ groupId: block.groupId, text: block.text })), [
     { groupId: 'actor', text: 'You take the vase and turn it over in your hands.' },
     { groupId: 'private', text: 'Another cheap clay imitation. There are too many of those on this block.' },
@@ -2685,6 +2807,7 @@ players:
 
   assert.equal(outcome.nextNodeId, undefined);
   assert.equal(outcome.logEntry?.text, 'You rotate the vase until the chipped side faces the wall.');
+  assert.equal(outcome.logEntry?.lane, 'visible');
   assert.deepEqual(outcome.logEntry?.blocks?.map((block) => ({ groupId: block.groupId, text: block.text })), [
     { groupId: 'actor', text: 'You rotate the vase until the chipped side faces the wall.' },
     { groupId: 'private', text: 'It changes nothing important, but the room looks slightly less careless.' },
@@ -2905,7 +3028,159 @@ player:
   });
 
   assert.equal(outcome.logEntry?.text, 'The room looks calmer with the vase set straight.');
+  assert.equal(outcome.logEntry?.lane, 'recent');
   assert.equal(outcome.sessionState?.objects?.vase_01?.enter_seen, true);
+});
+
+test('authored poi prose defaults to recent while authored choice prose defaults to visible', () => {
+  const sketchRuntime = createContentRuntime({
+    '../../../packages/content/sketch/title_screen.md': `---
+version: 1
+templateSchema: area
+templateSchemaVersion: 1
+
+id: title_screen
+displayName: Title Screen
+region: sketch_region
+
+exits:
+  - id: start
+    targetId: room_01
+    displayName: Start
+---
+
+# Title Screen
+
+## enter
+Begin.
+`,
+    '../../../packages/content/sketch/room_01.md': `---
+version: 1
+templateSchema: area
+templateSchemaVersion: 1
+
+id: room_01
+displayName: Room 01
+region: sketch_region
+
+pois:
+  - id: mirror
+    displayName: Mirror
+
+choices:
+  - id: linger
+    displayName: Linger
+---
+
+# Room 01
+
+## enter
+The room waits.
+
+## poi:mirror
+You inspect the mirror.
+
+## choice:linger
+You linger for a moment.
+`,
+  });
+
+  const poiOutcome = sketchRuntime.resolveProjectAction('sketch', 'room_01', {
+    id: 'mirror',
+    kind: 'poi',
+    label: 'Mirror',
+  });
+  const choiceOutcome = sketchRuntime.resolveProjectAction('sketch', 'room_01', {
+    id: 'linger',
+    kind: 'choice',
+    label: 'Linger',
+  });
+
+  assert.equal(poiOutcome.logEntry?.text, 'You inspect the mirror.');
+  assert.equal(poiOutcome.logEntry?.lane, 'recent');
+  assert.equal(choiceOutcome.logEntry?.text, 'You linger for a moment.');
+  assert.equal(choiceOutcome.logEntry?.lane, 'visible');
+});
+
+test('generated traversal text defaults to recent', () => {
+  const contentRuntime = createContentRuntime(contentFiles);
+  const continueOutcome = contentRuntime.resolveProjectControl('test01', 'test01_path', 'forward', {
+    id: 'continue',
+    kind: 'continue',
+    label: 'Continue',
+  }, {
+    pathVisitCount: 1,
+    pathBeatIndex: 1,
+  });
+
+  assert.equal(continueOutcome.logEntry?.text, 'You keep moving.');
+  assert.equal(continueOutcome.logEntry?.lane, 'recent');
+});
+
+test('sidecar events can explicitly override lane to visible', () => {
+  const sketchRuntime = createContentRuntime({
+    '../../../packages/content/sketch/title_screen.md': `---
+version: 1
+templateSchema: area
+templateSchemaVersion: 1
+
+id: title_screen
+displayName: Title Screen
+region: sketch_region
+
+exits:
+  - id: start
+    targetId: room_01
+    displayName: Start
+---
+
+# Title Screen
+
+## enter
+Begin.
+`,
+    '../../../packages/content/sketch/room_01.md': `---
+version: 1
+templateSchema: area
+templateSchemaVersion: 1
+
+id: room_01
+displayName: Room 01
+region: sketch_region
+
+choices:
+  - id: remember
+    displayName: Remember
+---
+
+# Room 01
+
+## enter
+The room waits.
+`,
+    '../../../packages/content/sketch/events.yaml': `events:
+  remember_visible:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: room_01
+      choiceId: remember
+
+    lane: visible
+
+    actor:
+      - The memory lands harder than expected.
+`,
+  });
+
+  const outcome = sketchRuntime.resolveProjectAction('sketch', 'room_01', {
+    id: 'remember',
+    kind: 'choice',
+    label: 'Remember',
+  });
+
+  assert.equal(outcome.logEntry?.text, 'The memory lands harder than expected.');
+  assert.equal(outcome.logEntry?.lane, 'visible');
 });
 
 test('runtime clock source can override seeded local time for predicate evaluation', () => {
@@ -3123,6 +3398,380 @@ player:
 
   assert.equal(duskOutcome.logEntry?.text, 'The streetlamps have just come on.');
   assert.equal(dawnOutcome.logEntry?.text, 'The streetlamps have gone dark again.');
+});
+
+test('phase schedules derive state from the current clock before predicate-based POI evaluation', () => {
+  const sketchFiles = {
+    '../../../packages/content/sketch/title_screen.md': `---
+version: 1
+templateSchema: area
+templateSchemaVersion: 1
+
+id: title_screen
+displayName: Title Screen
+region: sketch_region
+
+exits:
+  - id: start
+    targetId: sidewalk_north
+    displayName: Start
+---
+
+# Title Screen
+`,
+    '../../../packages/content/sketch/sidewalk_north.md': `---
+version: 1
+templateSchema: area
+templateSchemaVersion: 1
+
+id: sidewalk_north
+displayName: North Sidewalk
+region: sketch_region
+
+pois:
+  - id: streetlamps
+    displayName: Streetlamps
+---
+
+# North Sidewalk
+`,
+    '../../../packages/content/sketch/good_ending.md': `---
+version: 1
+templateSchema: area
+templateSchemaVersion: 1
+
+id: good_ending
+displayName: Good Ending
+region: sketch_region
+tags:
+  - ending
+---
+
+# Good Ending
+`,
+    '../../../packages/content/sketch/door.md': `---
+version: 1
+templateSchema: gate
+templateSchemaVersion: 1
+
+id: door
+displayName: Door
+region: sketch_region
+
+presentationMode: passthrough
+
+endpoints:
+  forward:
+    from: sidewalk_north
+    to: good_ending
+  backward:
+    from: good_ending
+    to: sidewalk_north
+---
+
+# Door
+`,
+    '../../../packages/content/sketch/block/events.yaml': `events:
+  inspect_streetlamps_when_on:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: sidewalk_north
+      poiId: streetlamps
+
+    when:
+      predicate: streetlamps_are_on
+
+    actor:
+      - The streetlamps are on now.
+
+  inspect_streetlamps_when_off:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: sidewalk_north
+      poiId: streetlamps
+
+    when:
+      predicate: streetlamps_are_off
+
+    actor:
+      - The streetlamps are off.
+`,
+    '../../../packages/content/sketch/predicates/project.yaml': `predicates:
+  streetlamps_are_on:
+    equals: [objects.streetlamps.on, true]
+
+  streetlamps_are_off:
+    equals: [objects.streetlamps.on, false]
+`,
+    '../../../packages/content/sketch/state/world.yaml': `objects:
+  streetlamps:
+    on: false
+
+player:
+  active:
+    id: player_01
+`,
+    '../../../packages/content/sketch/settings/time.yaml': `calendars:
+  default_world:
+    phases:
+      - id: day
+        durationMinutes: 1
+      - id: dusk
+        durationMinutes: 1
+      - id: dawn
+        durationMinutes: 1
+
+assignments:
+  defaultCalendar: default_world
+
+schedules:
+  lamps_on:
+    trigger:
+      kind: phase
+      phaseId: dusk
+    target:
+      nodes:
+        - sidewalk_north
+    effects:
+      - set: [objects.streetlamps.on, true]
+
+  lamps_off:
+    trigger:
+      kind: phase
+      phaseId: dawn
+    target:
+      nodes:
+        - sidewalk_north
+    effects:
+      - set: [objects.streetlamps.on, false]
+`,
+  };
+
+  const duskRuntime = createContentRuntime(sketchFiles, {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'dusk', nowMs: 0, source: 'server' };
+      },
+    },
+  });
+  const dawnRuntime = createContentRuntime(sketchFiles, {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'dawn', nowMs: 0, source: 'server' };
+      },
+    },
+  });
+
+  const duskOutcome = duskRuntime.resolveProjectAction('sketch', 'sidewalk_north', {
+    kind: 'poi',
+    id: 'streetlamps',
+    label: 'Streetlamps',
+  }, {
+    sessionState: duskRuntime.createInitialProjectSessionState('sketch'),
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+  const dawnOutcome = dawnRuntime.resolveProjectAction('sketch', 'sidewalk_north', {
+    kind: 'poi',
+    id: 'streetlamps',
+    label: 'Streetlamps',
+  }, {
+    sessionState: dawnRuntime.createInitialProjectSessionState('sketch'),
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+
+  assert.equal(duskOutcome.logEntry?.text, 'The streetlamps are on now.');
+  assert.equal(dawnOutcome.logEntry?.text, 'The streetlamps are off.');
+});
+
+test('phase-aligned schedules can re-enable the wrapped mint on the next matching phase, even if the player leaves first', () => {
+  const beforeRefillRuntime = createContentRuntime(loadProjectFiles('demo04'), {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'day', nowMs: 0, source: 'server' };
+      },
+    },
+  });
+  const afterRefillRuntime = createContentRuntime(loadProjectFiles('demo04'), {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'day', nowMs: 7 * 60_000, source: 'server' };
+      },
+    },
+  });
+
+  const initialState = beforeRefillRuntime.createInitialProjectSessionState('demo04');
+  const takeMintOutcome = beforeRefillRuntime.resolveProjectAction('demo04', 'building02_groundfloor', {
+    kind: 'choice',
+    id: 'take_counter_mint',
+    label: 'Take Wrapped Mint',
+  }, {
+    sessionState: initialState,
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+
+  const inspectBeforeRefill = beforeRefillRuntime.resolveProjectAction('demo04', 'building02_groundfloor', {
+    kind: 'poi',
+    id: 'sample_bowl',
+    label: 'Sample Bowl',
+  }, {
+    sessionState: takeMintOutcome.sessionState,
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+  const lookAwayAfterRefill = afterRefillRuntime.resolveProjectAction('demo04', 'sidewalk_north', {
+    kind: 'poi',
+    id: 'streetlamps',
+    label: 'Streetlamps',
+  }, {
+    sessionState: takeMintOutcome.sessionState,
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+  const inspectAfterRefill = afterRefillRuntime.resolveProjectAction('demo04', 'building02_groundfloor', {
+    kind: 'poi',
+    id: 'sample_bowl',
+    label: 'Sample Bowl',
+  }, {
+    sessionState: lookAwayAfterRefill.sessionState,
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+
+  assert.equal(inspectBeforeRefill.logEntry?.text, 'The bowl is empty now, though it looks like someone still means to keep the gesture going.');
+  assert.equal(inspectAfterRefill.logEntry?.text, 'One wrapped mint waits in the bowl like the room is still practicing for customers.');
+});
+
+test('phase-aligned schedules can re-enable the wrapped mint on the next matching phase while the player stays on the node', () => {
+  const beforeRefillRuntime = createContentRuntime(loadProjectFiles('demo04'), {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'day', nowMs: 0, source: 'server' };
+      },
+    },
+  });
+  const afterRefillRuntime = createContentRuntime(loadProjectFiles('demo04'), {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'day', nowMs: 7 * 60_000, source: 'server' };
+      },
+    },
+  });
+
+  const initialState = beforeRefillRuntime.createInitialProjectSessionState('demo04');
+  const takeMintOutcome = beforeRefillRuntime.resolveProjectAction('demo04', 'building02_groundfloor', {
+    kind: 'choice',
+    id: 'take_counter_mint',
+    label: 'Take Wrapped Mint',
+  }, {
+    sessionState: initialState,
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+
+  const inspectAfterRefill = afterRefillRuntime.resolveProjectAction('demo04', 'building02_groundfloor', {
+    kind: 'poi',
+    id: 'sample_bowl',
+    label: 'Sample Bowl',
+  }, {
+    sessionState: takeMintOutcome.sessionState,
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+
+  assert.equal(inspectAfterRefill.logEntry?.text, 'One wrapped mint waits in the bowl like the room is still practicing for customers.');
+});
+
+test('phase-aligned wrapped mint refill does not drift into the next phase when taken late in day', () => {
+  const takeLateDayRuntime = createContentRuntime(loadProjectFiles('demo04'), {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'day', nowMs: 90_000, source: 'server' };
+      },
+    },
+  });
+  const justBeforeNextDayRuntime = createContentRuntime(loadProjectFiles('demo04'), {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'dawn', nowMs: 359_000, source: 'server' };
+      },
+    },
+  });
+  const nextDayRuntime = createContentRuntime(loadProjectFiles('demo04'), {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'day', nowMs: 360_000, source: 'server' };
+      },
+    },
+  });
+
+  const initialState = takeLateDayRuntime.createInitialProjectSessionState('demo04');
+  const takeMintOutcome = takeLateDayRuntime.resolveProjectAction('demo04', 'building02_groundfloor', {
+    kind: 'choice',
+    id: 'take_counter_mint',
+    label: 'Take Wrapped Mint',
+  }, {
+    sessionState: initialState,
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+
+  const inspectBeforeMatchingPhase = justBeforeNextDayRuntime.resolveProjectAction('demo04', 'building02_groundfloor', {
+    kind: 'poi',
+    id: 'sample_bowl',
+    label: 'Sample Bowl',
+  }, {
+    sessionState: takeMintOutcome.sessionState,
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+  const inspectOnMatchingPhase = nextDayRuntime.resolveProjectAction('demo04', 'building02_groundfloor', {
+    kind: 'poi',
+    id: 'sample_bowl',
+    label: 'Sample Bowl',
+  }, {
+    sessionState: takeMintOutcome.sessionState,
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+
+  assert.equal(inspectBeforeMatchingPhase.logEntry?.text, 'The bowl is empty now, though it looks like someone still means to keep the gesture going.');
+  assert.equal(inspectOnMatchingPhase.logEntry?.text, 'One wrapped mint waits in the bowl like the room is still practicing for customers.');
+});
+
+test('schedule windows can make the morning paper appear at dawn and disappear later', () => {
+  const dawnRuntime = createContentRuntime(loadProjectFiles('demo04'), {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'dawn', nowMs: 0, source: 'server' };
+      },
+    },
+  });
+  const dayRuntime = createContentRuntime(loadProjectFiles('demo04'), {
+    clockSource: {
+      getSnapshot() {
+        return { phase: 'day', nowMs: 120_000, source: 'server' };
+      },
+    },
+  });
+
+  const dawnActions = dawnRuntime.getOfferedActions('demo04', 'building04_groundfloor', {
+    sessionState: dawnRuntime.createInitialProjectSessionState('demo04'),
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+  const dayActions = dayRuntime.getOfferedActions('demo04', 'building04_groundfloor', {
+    sessionState: dayRuntime.createInitialProjectSessionState('demo04'),
+    actorId: 'player_01',
+    viewerId: 'player_01',
+  });
+
+  assert.ok(dawnActions.some((action) => action.id === 'read_morning_paper'));
+  assert.ok(dayActions.every((action) => action.id !== 'read_morning_paper'));
 });
 
 test('runtime clock source can drive a night-only bed POI variant', () => {
@@ -3726,20 +4375,16 @@ test('keyboard shortcut matching is case-insensitive and supports numeric keys',
   assert.equal(numberMatch?.kind === 'action' ? numberMatch.action.id : undefined, 'test01_gate');
 });
 
-test('recent log suppresses duplicate text inside the cooldown window and keeps a bounded tail', () => {
+test('recent log keeps repeated lines and still enforces a bounded tail', () => {
   let now = 1000;
   let entries = appendLogEntry(undefined, { id: '1', text: 'It is picked clean.' }, now);
   entries = appendLogEntry(entries, { id: '2', text: 'It is picked clean.' }, now + 500);
   entries = appendLogEntry(entries, { id: '3', text: 'A different line.' }, now + 600);
 
-  assert.deepEqual(entries?.map((entry) => entry.text), ['It is picked clean.', 'A different line.']);
-
-  entries = appendLogEntry(entries, { id: '4', text: 'A different line.' }, now + 600 + RECENT_LOG_DUPLICATE_WINDOW_MS + 1);
-
-  assert.deepEqual(entries?.map((entry) => entry.text), ['It is picked clean.', 'A different line.', 'A different line.']);
+  assert.deepEqual(entries?.map((entry) => entry.text), ['It is picked clean.', 'It is picked clean.', 'A different line.']);
 
   for (let index = 0; index < 10; index += 1) {
-    now += RECENT_LOG_DUPLICATE_WINDOW_MS + 10;
+    now += 10;
     entries = appendLogEntry(entries, { id: `tail-${index}`, text: `Line ${index}` }, now);
   }
 
@@ -4222,6 +4867,40 @@ test('stable projected page resolver does not refresh visible prose when POI log
   assert.equal(secondPage.recentLog?.[0]?.text, 'look closer');
 });
 
+test('stable projected page resolver appends visible-lane log entries into page prose instead of recent', () => {
+  const resolver = createStableProjectedPageResolver(() => ({
+    kind: 'page',
+    nodeId: 'sunbleached_tree',
+    nodeKind: 'area',
+    title: 'Stable test',
+    proseBlocks: [
+      {
+        kind: 'paragraph',
+        text: 'visible-1',
+      },
+    ],
+    actions: [],
+    controls: [],
+  }));
+
+  const page = resolver.resolvePage('demo', 'sunbleached_tree', undefined, 1, undefined, undefined, undefined, [
+    {
+      id: 'log-1',
+      text: 'You take a closer look.',
+      lane: 'visible',
+    },
+  ]);
+
+  assert.equal(page?.kind, 'page');
+
+  if (!page || page.kind !== 'page') {
+    throw new Error('Expected projected page from the stable resolver.');
+  }
+
+  assert.deepEqual(page.proseBlocks.map((block) => block.text), ['visible-1', 'You take a closer look.']);
+  assert.equal(page.recentLog, undefined);
+});
+
 test('stable projected page resolver refreshes visible prose after an actual area revisit', () => {
   let resolveCount = 0;
 
@@ -4512,7 +5191,7 @@ test('demo04 building03 sidewalk-facing gate exposes day-only entry and night-on
     viewerId: activePlayerId,
   });
 
-  assert.equal(gateEnter.logEntry?.text, 'The door stands open and unlocked for business hours.');
+  assert.equal(gateEnter.logEntry?.text, 'The door stands open and unlocked right now.');
 
   const gatePage = demoRuntime.getProjectedPage('demo04', 'building03groundfloor_sidewalk_east', 'backward');
 
@@ -4532,7 +5211,7 @@ test('demo04 building03 sidewalk-facing gate exposes day-only entry and night-on
     viewerId: activePlayerId,
   });
 
-  assert.equal(businessHoursOutcome.logEntry?.text, "Open all day. Closed at night. We're open.");
+  assert.equal(businessHoursOutcome.logEntry?.text, 'Open all day. Closed at night. Right now the place is open.');
 
   const offeredActions = demoRuntime.getOfferedActions('demo04', 'building03groundfloor_sidewalk_east', {
     sessionState: initialSessionState,
@@ -4646,7 +5325,7 @@ test('demo04 building03 night behavior forces interiors outside and keeps the si
   assert.deepEqual(
     downstairsNightEnter.logEntry?.blocks?.map((block) => block.text),
     [
-      'The room gives you only a blink of interior shadow before the after-hours lock and the tight layout push the visit back outside.',
+      'The room gives you only a blink of interior shadow before the closed door and the tight layout push the visit back outside.',
       '*boink!*',
     ],
   );
@@ -4655,7 +5334,7 @@ test('demo04 building03 night behavior forces interiors outside and keeps the si
   assert.deepEqual(
     upstairsNightEnter.logEntry?.blocks?.map((block) => block.text),
     [
-      'Upstairs feels even less available after hours. A moment later you are back out at the door.',
+      'Upstairs feels unavailable while the door is closed. A moment later you are back out at the door.',
       '*boink!*',
     ],
   );
@@ -4666,7 +5345,7 @@ test('demo04 building03 night behavior forces interiors outside and keeps the si
     viewerId: activePlayerId,
   });
 
-  assert.equal(gateEnter.logEntry?.text, 'The door is shut and locked for the night.');
+  assert.equal(gateEnter.logEntry?.text, 'The door is shut and locked right now.');
 
   const gatePage = demoRuntime.getProjectedPage('demo04', 'building03groundfloor_sidewalk_east', 'backward');
 
@@ -4686,7 +5365,7 @@ test('demo04 building03 night behavior forces interiors outside and keeps the si
     viewerId: activePlayerId,
   });
 
-  assert.equal(businessHoursOutcome.logEntry?.text, 'Open all day. Closed at night. Closed.');
+  assert.equal(businessHoursOutcome.logEntry?.text, 'Open all day. Closed at night. Right now the place is closed.');
   assert.deepEqual(
     demoRuntime.getOfferedActions('demo04', 'building03groundfloor_sidewalk_east', {
       sessionState: initialSessionState,
@@ -4716,7 +5395,7 @@ test('demo04 building03 gate still answers business hours and allows entry at du
     viewerId: activePlayerId,
   });
 
-  assert.equal(gateEnter.logEntry?.text, 'The door stands open and unlocked for business hours.');
+  assert.equal(gateEnter.logEntry?.text, 'The door stands open and unlocked right now.');
 
   const gatePage = demoRuntime.getProjectedPage('demo04', 'building03groundfloor_sidewalk_east', 'backward');
 
@@ -4736,7 +5415,7 @@ test('demo04 building03 gate still answers business hours and allows entry at du
     viewerId: activePlayerId,
   });
 
-  assert.equal(businessHoursOutcome.logEntry?.text, "Open all day. Closed at night. We're open.");
+  assert.equal(businessHoursOutcome.logEntry?.text, 'Open all day. Closed at night. Right now the place is open.');
   assert.deepEqual(
     demoRuntime.getOfferedActions('demo04', 'building03groundfloor_sidewalk_east', {
       sessionState: initialSessionState,
@@ -4797,5 +5476,6 @@ test('runtime surfaces per-project weather settings from authored settings sidec
 
   assert.equal(demoRuntime.runtime.demo04?.weatherSettings?.assignments?.defaultPattern, 'block_weather');
   assert.equal(demoRuntime.runtime.demo04?.weatherSettings?.visibility?.regions?.diorama_block, true);
+  assert.equal(demoRuntime.runtime.demo04?.weatherSettings?.visibility?.nodes?.building01_groundfloor, false);
   assert.equal(demoRuntime.runtime.demo04?.weatherSettings?.visibility?.nodes?.building04_groundfloor, false);
 });

@@ -85,8 +85,9 @@ Runtime stack:
 4. projection into page models
 5. runtime core for project assembly and navigation resolution
 6. browser wrapper for discovery
-7. React app shell for route state, history, and shortcut dispatch
-8. renderer components for display
+7. session/runtime transport boundary for authoritative state and intent handling
+8. app shell for display orchestration and shortcut dispatch
+9. renderer components for display
 
 This is slightly richer than the earlier simpler diagram, but it matches the current implementation.
 
@@ -94,32 +95,52 @@ This is slightly richer than the earlier simpler diagram, but it matches the cur
 
 The app shell adds behavior on top of pure runtime data:
 
-- route state
-- per-project history
-- per-project area visit counts
-- per-node action attempt counts
-- recent log accumulation
-- same-node projected page stabilization so in-node interactions do not reselect visible prose
+- screen composition
+- display-only route/view state
 - keyboard shortcut dispatch
+- subscribed live snapshots for rendering
+- recent-log presentation shaping
+- same-node projected page stabilization so in-node interactions do not reselect visible prose
 - home screen vs project screen composition
 
 This should stay explicit so future refactors do not confuse pure projection with full browser behavior.
 
 Important note:
 
-The app shell owns lightweight run/session state that directly affects prose selection semantics.
+The current app code still contains older browser-managed run/session artifacts.
 
-That includes:
+Treat these as migration targets rather than the desired boundary:
 
-- whether an area is on first visit or repeat visit
-- which attempt count a POI or choice is currently on
-- whether a same-node rerender should preserve the already-selected visible prose
+- browser-managed history
+- browser-managed visit counts
+- browser-managed action attempt counts
+- browser-managed save/continue authority
+- browser-managed runtime session state
 
-That behavior is still app-level rather than part of pure projection.
+Authoritative state that affects traversal semantics, projection inputs, or persistence should move behind the runtime/session boundary instead of remaining in React state.
 
 The current code now uses a dedicated app-session helper module for route normalization and project-scoped state replacement.
 
-See `AppSessionStateV1.md` for the browser-only run/session layer above runtime.
+See `AppSessionStateV1.md` for the current client-session boundary and migration notes.
+
+## Ambient Announcements
+
+The runtime/session boundary now owns passive ambient recent-log announcements for time and weather.
+
+Current rules:
+
+- time and weather visibility are author-controlled through settings sidecars
+- time visibility supports `nodes`, `folders`, `regions`, and `defaultRecentLog`
+- weather visibility currently supports `nodes`, `regions`, and `defaultRecentLog`
+- the first playable node reached after `New Game` may seed the current visible time and weather state once
+- the title screen itself should not seed ambient time or weather recent-log entries
+- same-node phase or weather changes may append new recent-log entries when the current node is visible
+- leaving a visible node and returning later should not rebroadcast the same time phase line just because of traversal
+- local authored schedule effects, such as streetlamp state changes, remain separate from block-wide phase prose
+
+Practical implication:
+
+When changing title-screen flow, recent-log policy, or ambient visibility, treat `title_screen -> first playable node` as a special startup transition rather than an ordinary visible-to-visible traversal.
 
 ## Stability Rules
 
@@ -129,13 +150,14 @@ The following rules are worth preserving unless a later architecture revision in
 - keep browser-agnostic runtime logic in the core module
 - keep test coverage centered on the core runtime
 - treat project discovery and navigation resolution as runtime concerns above projection
+- keep projection renderer-facing and renderer-agnostic
+- do not use browser history as a gameplay or rendering primitive
 
 ## Current Simplifications
 
 The current runtime is deliberately simple in several ways:
 
 - if an authored `title_screen` Area exists, it is preferred as the start node; otherwise the runtime falls back to the first discovered Area
-- history-based back behavior is app-level and lightweight
 - alias resolution is permissive for authoring convenience during the current phase
 - invalid files are skipped rather than halting the whole project
 

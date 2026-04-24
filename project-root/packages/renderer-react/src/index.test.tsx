@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { ProjectionResult } from '../../projection/src';
 import { ProjectedPageView } from './components/ProjectedPageView';
-import { AUTO_PROSE_GROUP_DELAY_MS, ProseBlocks, createScheduledBlocks } from './components/ProseBlocks';
+import { AUTO_PROSE_GROUP_DELAY_MS, ProseBlocks, buildProseUpdatePlan, createScheduledBlocks } from './components/ProseBlocks';
 
 test('ProjectedPageView renders area navigation sections for area pages', () => {
   const page: ProjectionResult = {
@@ -271,6 +271,37 @@ test('ProjectedPageView keeps navigation visible by default even when prose uses
   assert.match(html, /Loose siding ticks in the wind\./);
   assert.match(html, /Area Navigation/);
   assert.match(html, /Dilapidated Shop/);
+});
+
+test('ProjectedPageView does not delay navigation for runtime-appended visible prose', () => {
+  const page: ProjectionResult = {
+    kind: 'page',
+    nodeId: 'sunbleached_tree',
+    nodeKind: 'area',
+    title: "Big O' Sunbleached Tree",
+    proseBlocks: [
+      {
+        groupId: 'runtime-log:log-1',
+        kind: 'paragraph',
+        text: 'It\'s picked clean by smaller hands.',
+        markers: [{ kind: 'delay', value: 'long' }],
+      },
+    ],
+    actions: [
+      {
+        id: 'wildraspberrybush',
+        kind: 'poi',
+        label: 'Wild Raspberry Bush',
+        key: 'W',
+        keyLabel: '[W]',
+      },
+    ],
+    controls: [],
+  };
+
+  const html = renderToStaticMarkup(<ProjectedPageView page={page} />);
+
+  assert.match(html, /Wild Raspberry Bush/);
 });
 
 test('ProseBlocks uses fade-out class when fade marker requests out direction', () => {
@@ -600,4 +631,35 @@ test('createScheduledBlocks adds a short gap between prose groups', () => {
     scheduled.map((entry) => entry.startsNewGroup),
     [false, false, true],
   );
+});
+
+test('buildProseUpdatePlan preserves visible prose when delayed blocks append', () => {
+  const previousBlocks = [
+    { kind: 'paragraph', text: 'Existing text.' },
+  ];
+  const nextBlocks = [
+    ...previousBlocks,
+    { kind: 'paragraph', text: 'Appended later.', markers: [{ kind: 'delay', value: 'medium' }] },
+  ];
+
+  const updatePlan = buildProseUpdatePlan(previousBlocks, nextBlocks, 1);
+
+  assert.equal(updatePlan.reset, false);
+  assert.equal(updatePlan.initialVisibleCount, 1);
+  assert.deepEqual(updatePlan.scheduledReveals, [{ index: 1, delayMs: 900 }]);
+});
+
+test('buildProseUpdatePlan resets when prose changes instead of appending', () => {
+  const previousBlocks = [
+    { kind: 'paragraph', text: 'Original text.' },
+  ];
+  const nextBlocks = [
+    { kind: 'paragraph', text: 'Replacement text.' },
+  ];
+
+  const updatePlan = buildProseUpdatePlan(previousBlocks, nextBlocks, 1);
+
+  assert.equal(updatePlan.reset, true);
+  assert.equal(updatePlan.initialVisibleCount, 1);
+  assert.deepEqual(updatePlan.scheduledReveals, []);
 });
