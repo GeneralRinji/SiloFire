@@ -101,18 +101,33 @@ interface AdminProjectScreenProps {
   isLoading?: boolean;
   project?: RuntimeAdminProjectHeartDetails;
   onBackOverview: () => void;
+  onOpenNode: (nodeId: string) => void;
   onResetHearts: () => void;
   onSignOut: () => void;
 }
 
-export function AdminProjectScreen({ isLoading, project, onBackOverview, onResetHearts, onSignOut }: AdminProjectScreenProps) {
+export function AdminProjectScreen({ isLoading, project, onBackOverview, onOpenNode, onResetHearts, onSignOut }: AdminProjectScreenProps) {
+  const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(project?.activeClock?.nodeId ?? project?.nodes[0]?.nodeId ?? project?.nodeList[0]?.nodeId);
+
+  const selectedNode = project?.nodeList.find((node) => node.nodeId === selectedNodeId)
+    ?? project?.nodes.find((node) => node.nodeId === selectedNodeId);
+
+  function handleOpenNode(nodeId: string): void {
+    setSelectedNodeId(nodeId);
+    onOpenNode(nodeId);
+  }
+
+  function getProjectNodeHref(nodeId: string): string {
+    return `/projects/${encodeURIComponent(project?.projectId ?? 'project')}/nodes/${encodeURIComponent(nodeId)}`;
+  }
+
   return (
     <main className="terminal-shell terminal-shell--project terminal-shell--admin-layout">
       <aside className="terminal-sidebar">
         <section className="terminal-block">
           <p className="terminal-path">silofire:/admin/hearts/{project?.projectId ?? 'project'}</p>
           <h1 className="terminal-title">{project?.title ?? 'Project Analytics'}</h1>
-          <p className="terminal-copy">Website-level analytics and state inspection. No gameplay page links are exposed here.</p>
+          <p className="terminal-copy">Website-level analytics and state inspection with links into the real project pages.</p>
           <div className="terminal-block__actions">
             <button type="button" className="terminal-link terminal-link--muted" onClick={onBackOverview}>back/overview</button>
             <button type="button" className="terminal-link terminal-link--muted" onClick={onSignOut}>sign/out</button>
@@ -130,6 +145,16 @@ export function AdminProjectScreen({ isLoading, project, onBackOverview, onReset
                   <p className="terminal-copy terminal-copy--strong">{node.label}</p>
                   <p className="terminal-copy">node/{node.nodeId}</p>
                   <p className="terminal-copy">hearts/{node.heartCount}</p>
+                  <a
+                    href={getProjectNodeHref(node.nodeId)}
+                    className={selectedNodeId === node.nodeId ? 'terminal-link terminal-link--active' : 'terminal-link'}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      handleOpenNode(node.nodeId);
+                    }}
+                  >
+                    open/node
+                  </a>
                 </li>
               ))}
             </ul>
@@ -140,6 +165,13 @@ export function AdminProjectScreen({ isLoading, project, onBackOverview, onReset
       <section className="terminal-stage admin-screen__stage">
         <section className="terminal-screen terminal-screen--admin-stage">
           <div className="terminal-block admin-screen__detail-block">
+            <p className="terminal-label">Selected Node</p>
+            {selectedNode ? <p className="terminal-copy terminal-copy--strong">{selectedNode.label}</p> : null}
+            {selectedNodeId ? <p className="terminal-copy">node/{selectedNodeId}</p> : null}
+            {selectedNodeId ? <p className="terminal-copy">route/projects/{project?.projectId ?? 'project'}/nodes/{selectedNodeId}</p> : null}
+          </div>
+
+          <div className="terminal-block admin-screen__detail-block">
             <p className="terminal-label">Current Node List</p>
             {isLoading ? <p className="terminal-copy">Loading project analytics…</p> : null}
             {project ? (
@@ -148,6 +180,16 @@ export function AdminProjectScreen({ isLoading, project, onBackOverview, onReset
                   <li key={node.nodeId} className="terminal-list__item admin-screen__node-item">
                     <p className="terminal-copy terminal-copy--strong">{node.label}</p>
                     <p className="terminal-copy">node/{node.nodeId}</p>
+                    <a
+                      href={getProjectNodeHref(node.nodeId)}
+                      className={selectedNodeId === node.nodeId ? 'terminal-link terminal-link--active' : 'terminal-link'}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        handleOpenNode(node.nodeId);
+                      }}
+                    >
+                      open/node
+                    </a>
                   </li>
                 ))}
               </ul>
@@ -178,7 +220,8 @@ export function AdminProjectScreen({ isLoading, project, onBackOverview, onReset
                 activeAmbientNpcs={project.activeAmbient?.npcs}
                 sessionNpcStateById={project.sessionNpcStateById}
                 sessionObjectStateById={project.sessionObjectStateById}
-                selectedNodeId={project.activeClock?.nodeId}
+                objectFieldDetailsById={project.objectFieldDetailsById}
+                selectedNodeId={selectedNodeId}
               />
             </div>
           ) : null}

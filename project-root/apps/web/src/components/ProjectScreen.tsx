@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { ContentProjectRecord } from '../../../../packages/content';
 import type { ProjectedAction, ProjectedControl, ProjectionResult } from '../../../../packages/projection/src';
-import type { RuntimeAmbientNpcSnapshot } from '../runtimeAmbient';
 import { ProjectedPageView } from '../../../../packages/renderer-react/src/components/ProjectedPageView';
 import { PublicHeartPane } from './PublicHeartPane';
+import { ProjectStatePanes } from './ProjectStatePanes';
+
+const HEART_UI_STORAGE_KEY = 'silofire.publicHearts';
 
 export interface ProjectNodeLink {
   id: string;
@@ -13,6 +15,12 @@ export interface ProjectNodeLink {
 interface ProjectScreenProps {
   project: ContentProjectRecord;
   nodes: ProjectNodeLink[];
+  showNodeList?: boolean;
+  showStatePanes?: boolean;
+  selectedNodeId?: string;
+  selectedPage?: ProjectionResult;
+  selectedPageRenderKey?: string;
+  selectedPageNavigationKey?: string;
   activeClock?: {
     nodeId?: string;
     calendarId?: string;
@@ -29,16 +37,19 @@ interface ProjectScreenProps {
     regionId?: string;
     source?: string;
   };
-  activeAmbientNpcs?: RuntimeAmbientNpcSnapshot[];
+  activeAmbientNpcs?: Array<{
+    id: string;
+    displayName?: string;
+    nodeId?: string;
+    previousNodeId?: string;
+    nextNodeId?: string;
+    behavior?: string;
+  }>;
   sessionNpcStateById?: Record<string, {
     location?: string;
     behavior?: string;
   }>;
   sessionObjectStateById?: Record<string, Record<string, string | number | boolean>>;
-  selectedNodeId?: string;
-  selectedPage?: ProjectionResult;
-  selectedPageRenderKey?: string;
-  selectedPageNavigationKey?: string;
   onBackHome: () => void;
   onResetRun?: () => void;
   onHeartNode?: (nodeId: string, nextActive: boolean) => Promise<boolean>;
@@ -50,15 +61,17 @@ interface ProjectScreenProps {
 export function ProjectScreen({
   project,
   nodes,
+  showNodeList = true,
+  showStatePanes = false,
+  selectedNodeId,
+  selectedPage,
+  selectedPageRenderKey,
+  selectedPageNavigationKey,
   activeClock,
   activeWeather,
   activeAmbientNpcs,
   sessionNpcStateById,
   sessionObjectStateById,
-  selectedNodeId,
-  selectedPage,
-  selectedPageRenderKey,
-  selectedPageNavigationKey,
   onBackHome,
   onResetRun,
   onHeartNode,
@@ -67,7 +80,7 @@ export function ProjectScreen({
   onControl,
 }: ProjectScreenProps) {
   const [isHeartSaving, setIsHeartSaving] = useState(false);
-  const [activeHeartNodeIds, setActiveHeartNodeIds] = useState<Record<string, boolean>>({});
+  const [activeHeartNodeIds, setActiveHeartNodeIds] = useState<Record<string, boolean>>(() => readStoredHeartNodeIds());
 
   const activeHeartKey = selectedNodeId ? `${project.id}:${selectedNodeId}` : undefined;
   const isHeartActive = activeHeartKey ? Boolean(activeHeartNodeIds[activeHeartKey]) : false;
@@ -75,6 +88,10 @@ export function ProjectScreen({
   useEffect(() => {
     setIsHeartSaving(false);
   }, [project.id, selectedNodeId]);
+
+  useEffect(() => {
+    writeStoredHeartNodeIds(activeHeartNodeIds);
+  }, [activeHeartNodeIds]);
 
   async function handleHeart() {
     if (!selectedNodeId || !onHeartNode || !activeHeartKey || isHeartSaving) {
@@ -116,27 +133,42 @@ export function ProjectScreen({
           </div>
         </section>
 
-        <section className="terminal-block">
-          <p className="terminal-label">Nodes</p>
+        {showNodeList ? (
+          <section className="terminal-block">
+            <p className="terminal-label">Nodes</p>
 
-          {nodes.length === 0 ? <p className="terminal-copy">No pages wired yet.</p> : null}
+            {nodes.length === 0 ? <p className="terminal-copy">No pages wired yet.</p> : null}
 
-          {nodes.length > 0 ? (
-            <ul className="terminal-list">
-              {nodes.map((node) => (
-                <li key={node.id} className="terminal-list__item">
-                  <button
-                    type="button"
-                    className={selectedNodeId === node.id ? 'terminal-link terminal-link--active' : 'terminal-link'}
-                    onClick={() => onSelectNode(node.id)}
-                  >
-                    open/{node.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
+            {nodes.length > 0 ? (
+              <ul className="terminal-list">
+                {nodes.map((node) => (
+                  <li key={node.id} className="terminal-list__item">
+                    <button
+                      type="button"
+                      className={selectedNodeId === node.id ? 'terminal-link terminal-link--active' : 'terminal-link'}
+                      onClick={() => onSelectNode(node.id)}
+                    >
+                      open/{node.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </section>
+        ) : null}
+
+        {showStatePanes ? (
+          <div className="terminal-sidebar__debug-panes">
+            <ProjectStatePanes
+              activeClock={activeClock}
+              activeWeather={activeWeather}
+              activeAmbientNpcs={activeAmbientNpcs}
+              sessionNpcStateById={sessionNpcStateById}
+              sessionObjectStateById={sessionObjectStateById}
+              selectedNodeId={selectedNodeId}
+            />
+          </div>
+        ) : null}
       </aside>
 
       <section className="terminal-stage">
@@ -154,7 +186,7 @@ export function ProjectScreen({
             <div className="terminal-block">
               <p className="terminal-path">silofire:/{project.folderName}/index</p>
               <p className="terminal-copy">
-                {nodes.length > 0 ? 'Select a node from the left.' : 'This project folder exists, but nothing has been authored for the web shell yet.'}
+                {showNodeList && nodes.length > 0 ? 'Select a node from the left.' : 'This project folder exists, but nothing has been authored for the web shell yet.'}
               </p>
             </div>
           </section>
@@ -162,4 +194,38 @@ export function ProjectScreen({
       </section>
     </main>
   );
+}
+
+function readStoredHeartNodeIds(): Record<string, boolean> {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const rawValue = window.sessionStorage.getItem(HEART_UI_STORAGE_KEY);
+
+    if (!rawValue) {
+      return {};
+    }
+
+    const parsedValue = JSON.parse(rawValue) as Record<string, unknown>;
+
+    return Object.fromEntries(
+      Object.entries(parsedValue).filter(([, value]) => typeof value === 'boolean'),
+    ) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredHeartNodeIds(activeHeartNodeIds: Record<string, boolean>): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(HEART_UI_STORAGE_KEY, JSON.stringify(activeHeartNodeIds));
+  } catch {
+    // Ignore storage failures for this client-only analytics toggle memory.
+  }
 }

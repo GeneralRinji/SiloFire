@@ -23,6 +23,11 @@ interface ProjectStatePanesProps {
     behavior?: string;
   }>;
   sessionObjectStateById?: Record<string, Record<string, string | number | boolean>>;
+  objectFieldDetailsById?: Record<string, Record<string, {
+    currentValue?: string | number | boolean;
+    defaultValue?: string | number | boolean;
+    possibleValues: Array<string | number | boolean>;
+  }>>;
   selectedNodeId?: string;
 }
 
@@ -32,11 +37,15 @@ export function ProjectStatePanes({
   activeAmbientNpcs,
   sessionNpcStateById,
   sessionObjectStateById,
+  objectFieldDetailsById,
   selectedNodeId,
 }: ProjectStatePanesProps) {
   const ambientNpcsHere = activeAmbientNpcs?.filter((npc) => selectedNodeId !== undefined && npc.nodeId === selectedNodeId) ?? [];
   const ambientNpcById: Record<string, RuntimeAmbientNpcSnapshot> = Object.fromEntries((activeAmbientNpcs ?? []).map((npc) => [npc.id, npc]));
-  const objectDebugIds = Object.keys(sessionObjectStateById ?? {}).sort((left, right) => left.localeCompare(right));
+  const objectDebugIds = Array.from(new Set([
+    ...Object.keys(sessionObjectStateById ?? {}),
+    ...Object.keys(objectFieldDetailsById ?? {}),
+  ])).sort((left, right) => left.localeCompare(right));
   const ambientDebugNpcIds = Array.from(new Set([
     ...Object.keys(ambientNpcById),
     ...Object.keys(sessionNpcStateById ?? {}),
@@ -118,16 +127,30 @@ export function ProjectStatePanes({
           <ul className="terminal-list terminal-list--presence">
             {objectDebugIds.map((objectId) => {
               const objectState = sessionObjectStateById?.[objectId] ?? {};
-              const fieldEntries = Object.entries(objectState);
+              const objectFieldDetails = objectFieldDetailsById?.[objectId] ?? {};
+              const fieldNames = Array.from(new Set([
+                ...Object.keys(objectState),
+                ...Object.keys(objectFieldDetails),
+              ])).sort((left, right) => left.localeCompare(right));
 
               return (
                 <li key={objectId} className="terminal-list__item terminal-list__item--presence">
                   <p className="terminal-copy terminal-copy--strong">{objectId}</p>
-                  {fieldEntries.map(([fieldName, fieldValue]) => (
-                    <p key={fieldName} className="terminal-copy">
-                      {fieldName}/{String(fieldValue)}
-                    </p>
-                  ))}
+                  {fieldNames.map((fieldName) => {
+                    const fieldDetails = objectFieldDetails[fieldName];
+                    const currentValue = fieldDetails?.currentValue ?? objectState[fieldName];
+                    const defaultValue = fieldDetails?.defaultValue;
+                    const possibleValues = fieldDetails?.possibleValues ?? [];
+
+                    return (
+                      <div key={fieldName}>
+                        <p className="terminal-copy">field/{fieldName}</p>
+                        <p className="terminal-copy">current/{currentValue === undefined ? 'none' : String(currentValue)}</p>
+                        <p className="terminal-copy">default/{defaultValue === undefined ? 'none' : String(defaultValue)}</p>
+                        <p className="terminal-copy">states/{possibleValues.length > 0 ? possibleValues.map(String).join(' | ') : 'unknown'}</p>
+                      </div>
+                    );
+                  })}
                 </li>
               );
             })}

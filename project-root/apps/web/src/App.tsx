@@ -21,12 +21,21 @@ const SERVER_RUNTIME_CLOCK_SOURCE = createServerRuntimeClockSource();
 const SERVER_RUNTIME_AMBIENT_SOURCE = createServerRuntimeAmbientSource();
 const SERVER_RUNTIME_WEATHER_SOURCE = createServerRuntimeWeatherSource();
 const ADMIN_PASSWORD_STORAGE_KEY = 'silofire.admin.password';
+const IS_LOCAL_DEV = typeof window !== 'undefined'
+  && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const SHOW_PUBLIC_PROJECT_NODE_LIST = IS_LOCAL_DEV;
+const SHOW_PUBLIC_PROJECT_STATE_PANES = IS_LOCAL_DEV;
+const ADMIN_REFRESH_INTERVAL_MS = 5000;
 
 type AppRoute =
   | { kind: 'home' }
   | { kind: 'admin_overview' }
   | { kind: 'admin_project'; projectId: string }
   | ProjectRouteState;
+
+type AppHistoryState = {
+  silofireRoute?: AppRoute;
+};
 
 export function App() {
   const ambientNpcSnapshotsRef = useRef<Record<string, Record<string, RuntimeAmbientNpcSnapshot>>>({});
@@ -94,7 +103,11 @@ export function App() {
     }
 
     let canceled = false;
-    setAdminLoading(true);
+    const hasCachedAdminData = route.kind === 'admin_project'
+      ? Boolean(adminProjectDetailsById[route.projectId])
+      : adminOverview.length > 0;
+
+    setAdminLoading(!hasCachedAdminData);
 
     void listRuntimeAdminHeartOverview(adminPassword).then(async (overviewResult) => {
       if (canceled) {
@@ -155,7 +168,42 @@ export function App() {
     return () => {
       canceled = true;
     };
-  }, [route.kind, route.kind === 'admin_project' ? route.projectId : undefined, adminPassword, adminRevision]);
+  }, [
+    route.kind,
+    route.kind === 'admin_project' ? route.projectId : undefined,
+    adminPassword,
+    adminRevision,
+    adminOverview.length,
+    route.kind === 'admin_project' ? adminProjectDetailsById[route.projectId] : undefined,
+  ]);
+
+  useEffect(() => {
+    if (!isAdminRoute(route) || !adminPassword) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setAdminRevision((current) => current + 1);
+    }, ADMIN_REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [route.kind, route.kind === 'admin_project' ? route.projectId : undefined, adminPassword]);
+
+  useEffect(() => {
+    if (route.kind !== 'project') {
+      return;
+    }
+
+    const existingSessionView = runtimeSessionViewsByProjectId[route.projectId];
+
+    if (existingSessionView) {
+      return;
+    }
+
+    void openProjectSession(route.projectId, route.nodeId);
+  }, [route.kind, route.kind === 'project' ? route.projectId : undefined, route.kind === 'project' ? route.nodeId : undefined, runtimeSessionViewsByProjectId]);
 
   useEffect(() => {
     if (route.kind !== 'project') {
@@ -486,6 +534,9 @@ export function App() {
           isLoading={adminLoading}
           project={adminProjectDetailsById[route.projectId]}
           onBackOverview={() => applyAppRoute({ kind: 'admin_overview' })}
+          onOpenNode={(nodeId) => {
+            void openProjectSession(route.projectId, nodeId);
+          }}
           onResetHearts={() => {
             void handleAdminHeartReset(route.projectId);
           }}
@@ -531,12 +582,18 @@ export function App() {
     <ProjectScreen
       project={project}
       nodes={nodes}
+      showNodeList={SHOW_PUBLIC_PROJECT_NODE_LIST}
+      showStatePanes={SHOW_PUBLIC_PROJECT_STATE_PANES}
+      selectedNodeId={currentNodeId}
+      selectedPage={fullyEffectiveSelectedPage}
+      selectedPageRenderKey={selectedPageRenderKey}
+      selectedPageNavigationKey={selectedPageNavigationKey}
       activeClock={activeClock ? {
         nodeId: currentNodeId,
-        calendarId: getOptionalStringValue(activeClock, 'calendarId'),
+        calendarId: activeClock.calendarId,
         phase: activeClock.phase,
         nowLabel: formatRuntimeClockTimestamp(activeClock.nowMs),
-        nextPhaseLabel: formatPreviewClockCountdown(getOptionalNumberValue(activeClock, 'nextPhaseInMs')),
+        nextPhaseLabel: formatPreviewClockCountdown(activeClock.nextPhaseInMs),
         source: activeClock.source,
       } : undefined}
       activeWeather={activeWeather ? {
@@ -550,10 +607,6 @@ export function App() {
       activeAmbientNpcs={activeAmbientNpcs}
       sessionNpcStateById={sessionNpcStateById}
       sessionObjectStateById={sessionObjectStateById}
-      selectedNodeId={currentNodeId}
-      selectedPage={fullyEffectiveSelectedPage}
-      selectedPageRenderKey={selectedPageRenderKey}
-      selectedPageNavigationKey={selectedPageNavigationKey}
       onBackHome={() => applyAppRoute({ kind: 'home' })}
       onResetRun={() => {
         if (!projectId || !activeRuntimeSessionSnapshot) {
@@ -596,10 +649,37 @@ function readInitialAppRoute(): AppRoute {
     return { kind: 'home' };
   }
 
-  return parseAppRoutePath(window.location.pathname);
+  return readAppRouteFromLocation(window.location.pathname, window.history.state);
+}
+
+export function readAppRouteFromLocation(pathname: string, historyState: unknown): AppRoute {
+  const storedRoute = readStoredAppRoute(historyState);
+
+  if (storedRoute) {
+    return storedRoute;
+  }
+
+  return parseAppRoutePath(pathname);
 }
 
 function parseAppRoutePath(pathname: string): AppRoute {
+  const projectNodeMatch = /^\/projects\/([^/]+)\/nodes\/([^/]+)\/?$/.exec(pathname);
+
+  if (projectNodeMatch) {
+    return buildProjectRouteState(decodeURIComponent(projectNodeMatch[1]), {
+      nodeId: decodeURIComponent(projectNodeMatch[2]),
+      runNonce: 0,
+    });
+  }
+
+  const projectMatch = /^\/projects\/([^/]+)\/?$/.exec(pathname);
+
+  if (projectMatch) {
+    return buildProjectRouteState(decodeURIComponent(projectMatch[1]), {
+      runNonce: 0,
+    });
+  }
+
   const adminProjectMatch = /^\/admin\/projects\/([^/]+)\/?$/.exec(pathname);
 
   if (adminProjectMatch) {
@@ -621,22 +701,55 @@ function syncBrowserRoute(route: AppRoute, historyMode: 'push' | 'replace'): voi
     return;
   }
 
-  const nextPath = route.kind === 'admin_project'
-    ? `/admin/projects/${encodeURIComponent(route.projectId)}`
-    : route.kind === 'admin_overview'
-      ? '/admin'
-      : '/';
+  const nextPath = buildVisibleBrowserPath(route);
+  const nextState: AppHistoryState = {
+    silofireRoute: route,
+  };
 
-  if (window.location.pathname === nextPath) {
+  if (window.location.pathname === nextPath && areRoutesEquivalent(readStoredAppRoute(window.history.state), route)) {
     return;
   }
 
   if (historyMode === 'replace') {
-    window.history.replaceState({}, '', nextPath);
+    window.history.replaceState(nextState, '', nextPath);
     return;
   }
 
-  window.history.pushState({}, '', nextPath);
+  window.history.pushState(nextState, '', nextPath);
+}
+
+export function buildVisibleBrowserPath(route: AppRoute): string {
+  return route.kind === 'admin_project'
+    ? `/admin/projects/${encodeURIComponent(route.projectId)}`
+    : route.kind === 'admin_overview'
+      ? '/admin'
+      : '/';
+}
+
+function readStoredAppRoute(historyState: unknown): AppRoute | undefined {
+  const route = (historyState as AppHistoryState | null | undefined)?.silofireRoute;
+
+  if (!route || typeof route !== 'object') {
+    return undefined;
+  }
+
+  if (route.kind === 'home' || route.kind === 'admin_overview') {
+    return route;
+  }
+
+  if (route.kind === 'admin_project' && typeof route.projectId === 'string') {
+    return route;
+  }
+
+  if (route.kind === 'project' && typeof route.projectId === 'string' && typeof route.runNonce === 'number') {
+    return route;
+  }
+
+  return undefined;
+}
+
+function areRoutesEquivalent(left: AppRoute | undefined, right: AppRoute): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function readStoredAdminPassword(): string | undefined {

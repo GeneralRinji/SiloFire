@@ -46,6 +46,7 @@ test('AdminProjectScreen renders analytics without player-facing open links', ()
         },
       }}
       onBackOverview={() => {}}
+      onOpenNode={() => {}}
       onResetHearts={() => {}}
       onSignOut={() => {}}
     />,
@@ -53,8 +54,12 @@ test('AdminProjectScreen renders analytics without player-facing open links', ()
 
   assert.match(html, /Demo 04/);
   assert.match(html, /hearts\/5/);
+  assert.match(html, /Selected Node/);
   assert.match(html, /Current Node List/);
+  assert.match(html, /route\/projects\/demo04\/nodes\/sidewalk_north/);
+  assert.match(html, /href="\/projects\/demo04\/nodes\/title_screen"/);
+  assert.match(html, /href="\/projects\/demo04\/nodes\/sidewalk_north"/);
+  assert.match(html, /open\/node/);
   assert.match(html, /building03_door/);
   assert.doesNotMatch(html, /open\/sidewalk_north/);
-  assert.doesNotMatch(html, /open\/title_screen/);
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 
-import { createRuntimeApiService, matchRuntimeApiRequest } from '../../../packages/runtime-server/src';
+import { createRuntimeApiService, matchRuntimeApiRequest, type PersistedRuntimeSessionSnapshot } from '../../../packages/runtime-server/src';
 
 const projectRoot = resolve(__dirname, '..', '..', '..');
 
@@ -39,6 +39,34 @@ class MemoryRuntimeStore {
     });
 
     return Array.from(children.entries()).map(([name, isFile]) => ({ name, isFile }));
+  }
+}
+
+class MemorySnapshotStore {
+  constructor(private readonly values: Record<string, PersistedRuntimeSessionSnapshot> = {}) {}
+
+  async has(key: string): Promise<boolean> {
+    return Object.prototype.hasOwnProperty.call(this.values, key);
+  }
+
+  async get(key: string): Promise<PersistedRuntimeSessionSnapshot | undefined> {
+    return this.values[key];
+  }
+
+  async set(key: string, value: PersistedRuntimeSessionSnapshot): Promise<void> {
+    this.values[key] = value;
+  }
+
+  async delete(key: string): Promise<void> {
+    delete this.values[key];
+  }
+
+  async *list(prefix?: string): AsyncIterable<{ key: string; value: PersistedRuntimeSessionSnapshot }> {
+    for (const [key, value] of Object.entries(this.values)) {
+      if (!prefix || key === prefix || key.startsWith(`${prefix}/`)) {
+        yield { key, value };
+      }
+    }
   }
 }
 
@@ -188,6 +216,61 @@ test('runtime api heart analytics add, remove, rank, project detail, and reset w
 
   assert.equal(resetDetails.totalHearts, 0);
   assert.equal(resetDetails.nodes[0]?.heartCount, 0);
+});
+
+test('runtime api admin project detail prefers persisted shared session state over authored defaults', async () => {
+  const snapshotStore = new MemorySnapshotStore({
+    'projects/demo04/snapshot': {
+      projectId: 'demo04',
+      route: {
+        nodeId: 'building04_groundfloor',
+        pathDirection: undefined,
+        pathBeatIndex: undefined,
+        runNonce: 0,
+      },
+      areaVisitCounts: {},
+      pathVisitCounts: {},
+      recentLogByNodeId: {},
+      actionAttemptsByNodeId: {},
+      sessionState: {
+        npcs: {
+          resident_01: {
+            location: 'sidewalk_north',
+            behavior: 'move',
+          },
+        },
+        objects: {
+          building03_door: {
+            open: false,
+            locked: true,
+          },
+        },
+      },
+      savedAt: Date.now(),
+    },
+  });
+
+  const runtimeApi = createRuntimeApiService(new MemoryRuntimeStore(loadProjectFiles('demo04')), {
+    adminPassword: 'open-sesame',
+    snapshotStore,
+  });
+
+  const details = await runtimeApi.getHeartAdminProject('demo04');
+
+  if (!details) {
+    throw new Error('Expected admin heart detail for demo04.');
+  }
+
+  assert.deepEqual(details.sessionNpcStateById?.resident_01, {
+    location: 'sidewalk_north',
+    behavior: 'move',
+  });
+  assert.deepEqual(details.sessionObjectStateById?.building03_door, {
+    open: false,
+    locked: true,
+  });
+  assert.deepEqual(details.objectFieldDetailsById?.building03_door?.open?.defaultValue, true);
+  assert.deepEqual(details.objectFieldDetailsById?.building03_door?.open?.possibleValues, [true, false]);
 });
 
 test('runtime api service exposes session-backed progression over project content', async () => {

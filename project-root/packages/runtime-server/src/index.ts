@@ -1,5 +1,5 @@
 import { buildContentProjectRecord, isContentProjectAvailable, type ContentProjectRecord } from '../../content';
-import { parseNpcSidecar, parseStateSidecar, parseTimeSettingsSidecar, parseWeatherSettingsSidecar } from '../../parser/src';
+import { parseNpcSidecar, parsePredicateSidecar, parseStateSidecar, parseTimeSettingsSidecar, parseWeatherSettingsSidecar } from '../../parser/src';
 import { resolveProjectClockSnapshot, resolveRuntimeClockPhases, type PreviewRuntimeClockSnapshot } from '../../runtime/src/runtimeClock';
 import { resolveAssignedProjectCalendar } from '../../runtime/src/runtimeClock';
 import { resolveRuntimeAmbientSnapshot, type RuntimeAmbientNpcSnapshot, type RuntimeAmbientNpcStateSeed, type RuntimeAmbientSnapshot } from '../../../apps/web/src/runtimeAmbient';
@@ -123,6 +123,11 @@ export interface RuntimeAdminProjectHeartDetails {
     behavior?: string;
   }>;
   sessionObjectStateById?: Record<string, Record<string, string | number | boolean>>;
+  objectFieldDetailsById?: Record<string, Record<string, {
+    currentValue?: string | number | boolean;
+    defaultValue?: string | number | boolean;
+    possibleValues: Array<string | number | boolean>;
+  }>>;
 }
 
 export function matchRuntimeApiRequest(url: string): RuntimeApiRouteMatch | undefined {
@@ -376,7 +381,17 @@ export function createRuntimeApiService(
       }
 
       const contentProjectRecord = buildContentProjectRecord(projectId, 'playable-demo');
+      const persistedSnapshot = await snapshotStore.get(projectSnapshotKey(projectId));
       const stateSeeds = await extractProjectStateSeeds(store, contentRoot, projectId);
+      const liveSessionState = extractLiveProjectState(persistedSnapshot?.sessionState);
+      const currentObjectStateById = liveSessionState.sessionObjectStateById ?? stateSeeds.sessionObjectStateById;
+      const objectFieldDetailsById = await extractProjectObjectFieldDetails(
+        store,
+        contentRoot,
+        projectId,
+        currentObjectStateById,
+        stateSeeds.sessionObjectStateById,
+      );
       const nodeHeartCounts = await listProjectHeartCounts(projectId);
       const heartCountByNodeId = new Map(nodeHeartCounts.map((entry) => [entry.nodeId, entry.count]));
       const activeClock = projectMetadata.startNodeId
@@ -403,8 +418,9 @@ export function createRuntimeApiService(
         activeClock,
         activeWeather,
         activeAmbient,
-        sessionNpcStateById: stateSeeds.sessionNpcStateById,
-        sessionObjectStateById: stateSeeds.sessionObjectStateById,
+        sessionNpcStateById: liveSessionState.sessionNpcStateById ?? stateSeeds.sessionNpcStateById,
+        sessionObjectStateById: currentObjectStateById,
+        objectFieldDetailsById,
       };
     },
     async resetProjectHearts(projectId) {
@@ -1598,6 +1614,185 @@ async function extractProjectStateSeeds(
     sessionNpcStateById,
     sessionObjectStateById,
   };
+}
+
+function extractLiveProjectState(
+  sessionState: RuntimeSessionState | undefined,
+): {
+  sessionNpcStateById?: Record<string, { location?: string; behavior?: string }>;
+  sessionObjectStateById?: Record<string, Record<string, string | number | boolean>>;
+} {
+  const sessionNpcStateById = sessionState?.npcs && typeof sessionState.npcs === 'object' && !Array.isArray(sessionState.npcs)
+    ? Object.fromEntries(
+        Object.entries(sessionState.npcs).map(([npcId, value]) => {
+          const npcState = value && typeof value === 'object' && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : {};
+
+          return [npcId, {
+            location: typeof npcState.location === 'string' ? npcState.location : undefined,
+            behavior: typeof npcState.behavior === 'string' ? npcState.behavior : undefined,
+          }];
+        }),
+      )
+    : undefined;
+
+  const sessionObjectStateById = sessionState?.objects && typeof sessionState.objects === 'object' && !Array.isArray(sessionState.objects)
+    ? Object.fromEntries(
+        Object.entries(sessionState.objects)
+          .map(([objectId, value]) => {
+            const objectState = value && typeof value === 'object' && !Array.isArray(value)
+              ? (value as Record<string, unknown>)
+              : {};
+            const visibleFields = Object.fromEntries(
+              Object.entries(objectState).filter(([, fieldValue]) => (
+                typeof fieldValue === 'string'
+                || typeof fieldValue === 'number'
+                || typeof fieldValue === 'boolean'
+              )),
+            );
+
+            return [objectId, visibleFields];
+          })
+          .filter(([, objectState]) => Object.keys(objectState).length > 0),
+      )
+    : undefined;
+
+  return {
+    sessionNpcStateById,
+    sessionObjectStateById,
+  };
+}
+
+async function extractProjectObjectFieldDetails(
+  store: RuntimeContentStore,
+  contentRoot: string,
+  projectId: string,
+  currentObjectStateById: Record<string, Record<string, string | number | boolean>> | undefined,
+  defaultObjectStateById: Record<string, Record<string, string | number | boolean>> | undefined,
+): Promise<Record<string, Record<string, {
+  currentValue?: string | number | boolean;
+  defaultValue?: string | number | boolean;
+  possibleValues: Array<string | number | boolean>;
+}>> | undefined> {
+  const contentFiles = await collectProjectContentFiles(store, contentRoot, projectId);
+  const possibleValuesByFieldKey = new Map<string, Array<string | number | boolean>>();
+
+  for (const [objectId, fieldValues] of Object.entries(defaultObjectStateById ?? {})) {
+    for (const [fieldName, fieldValue] of Object.entries(fieldValues)) {
+      appendPossibleObjectFieldValue(possibleValuesByFieldKey, objectId, fieldName, fieldValue);
+    }
+  }
+
+  for (const [objectId, fieldValues] of Object.entries(currentObjectStateById ?? {})) {
+    for (const [fieldName, fieldValue] of Object.entries(fieldValues)) {
+      appendPossibleObjectFieldValue(possibleValuesByFieldKey, objectId, fieldName, fieldValue);
+    }
+  }
+
+  for (const [sourcePath, source] of Object.entries(contentFiles)) {
+    if (!/\/predicates\/.*\.ya?ml$/i.test(sourcePath.replace(/\\/g, '/'))) {
+      continue;
+    }
+
+    const parsedPredicates = parsePredicateSidecar(source, sourcePath);
+
+    if (!parsedPredicates.value) {
+      continue;
+    }
+
+    for (const definition of Object.values(parsedPredicates.value)) {
+      collectObjectFieldValuesFromPredicate(definition, possibleValuesByFieldKey);
+    }
+  }
+
+  const objectIds = Array.from(new Set([
+    ...Object.keys(defaultObjectStateById ?? {}),
+    ...Object.keys(currentObjectStateById ?? {}),
+    ...Array.from(possibleValuesByFieldKey.keys()).map((fieldKey) => fieldKey.split('/', 1)[0] ?? ''),
+  ])).filter((objectId) => objectId.length > 0).sort((left, right) => left.localeCompare(right));
+
+  if (objectIds.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(objectIds.map((objectId) => {
+    const fieldNames = Array.from(new Set([
+      ...Object.keys(defaultObjectStateById?.[objectId] ?? {}),
+      ...Object.keys(currentObjectStateById?.[objectId] ?? {}),
+      ...Array.from(possibleValuesByFieldKey.keys())
+        .filter((fieldKey) => fieldKey.startsWith(`${objectId}/`))
+        .map((fieldKey) => fieldKey.slice(objectId.length + 1)),
+    ])).sort((left, right) => left.localeCompare(right));
+
+    return [objectId, Object.fromEntries(fieldNames.map((fieldName) => {
+      const fieldKey = `${objectId}/${fieldName}`;
+      const possibleValues = possibleValuesByFieldKey.get(fieldKey) ?? [];
+
+      return [fieldName, {
+        currentValue: currentObjectStateById?.[objectId]?.[fieldName],
+        defaultValue: defaultObjectStateById?.[objectId]?.[fieldName],
+        possibleValues,
+      }];
+    }))];
+  }));
+}
+
+function collectObjectFieldValuesFromPredicate(
+  value: unknown,
+  possibleValuesByFieldKey: Map<string, Array<string | number | boolean>>,
+): void {
+  if (Array.isArray(value)) {
+    if (
+      value.length === 2
+      && typeof value[0] === 'string'
+      && value[0].startsWith('objects.')
+      && isScalarObjectFieldValue(value[1])
+    ) {
+      const fieldPath = value[0].slice('objects.'.length);
+      const fieldPathParts = fieldPath.split('.');
+      const objectId = fieldPathParts.shift();
+      const fieldName = fieldPathParts.join('.');
+
+      if (objectId && fieldName) {
+        appendPossibleObjectFieldValue(possibleValuesByFieldKey, objectId, fieldName, value[1]);
+      }
+    }
+
+    for (const entry of value) {
+      collectObjectFieldValuesFromPredicate(entry, possibleValuesByFieldKey);
+    }
+
+    return;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return;
+  }
+
+  for (const nestedValue of Object.values(value as Record<string, unknown>)) {
+    collectObjectFieldValuesFromPredicate(nestedValue, possibleValuesByFieldKey);
+  }
+}
+
+function appendPossibleObjectFieldValue(
+  possibleValuesByFieldKey: Map<string, Array<string | number | boolean>>,
+  objectId: string,
+  fieldName: string,
+  fieldValue: string | number | boolean,
+): void {
+  const fieldKey = `${objectId}/${fieldName}`;
+  const existingValues = possibleValuesByFieldKey.get(fieldKey) ?? [];
+
+  if (existingValues.includes(fieldValue)) {
+    return;
+  }
+
+  possibleValuesByFieldKey.set(fieldKey, [...existingValues, fieldValue]);
+}
+
+function isScalarObjectFieldValue(value: unknown): value is string | number | boolean {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
 function resolveClockSourceLabel(
