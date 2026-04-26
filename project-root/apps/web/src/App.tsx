@@ -9,26 +9,39 @@ import { buildProjectRouteState, type ProjectRouteState } from './projectSession
 import { createServerRuntimeAmbientSource, type RuntimeAmbientNpcSnapshot } from './runtimeAmbient';
 import { applyRuntimeSessionAction, applyRuntimeSessionControl, createRuntimeSession, getRuntimeSession, resetRuntimeSession, type RuntimeSessionView } from './runtimeSessionApi';
 import { createServerRuntimeWeatherSource, type RuntimeWeatherProjectSnapshot } from './runtimeWeather';
+import { getRuntimeAdminHeartProject, listRuntimeAdminHeartOverview, resetRuntimeAdminHeartProject } from './runtimeAdminApi';
+import { setRuntimeHeart } from './runtimeHeartApi';
 import { listRuntimeProjects } from './runtimeProjectApi';
+import { AdminGateScreen, AdminOverviewScreen, AdminProjectScreen } from './components/AdminScreen';
 import { HomeScreen } from './components/HomeScreen';
 import { ProjectScreen, type ProjectNodeLink } from './components/ProjectScreen';
+import type { RuntimeAdminProjectHeartDetails, RuntimeAdminProjectHeartSummary } from '../../../packages/runtime-server/src';
 
 const SERVER_RUNTIME_CLOCK_SOURCE = createServerRuntimeClockSource();
 const SERVER_RUNTIME_AMBIENT_SOURCE = createServerRuntimeAmbientSource();
 const SERVER_RUNTIME_WEATHER_SOURCE = createServerRuntimeWeatherSource();
+const ADMIN_PASSWORD_STORAGE_KEY = 'silofire.admin.password';
 
 type AppRoute =
   | { kind: 'home' }
+  | { kind: 'admin_overview' }
+  | { kind: 'admin_project'; projectId: string }
   | ProjectRouteState;
 
 export function App() {
   const ambientNpcSnapshotsRef = useRef<Record<string, Record<string, RuntimeAmbientNpcSnapshot>>>({});
   const weatherSnapshotsRef = useRef<Record<string, RuntimeWeatherProjectSnapshot>>({});
   const projectMutationVersionRef = useRef<Record<string, number>>({});
-  const [route, setRoute] = useState<AppRoute>({ kind: 'home' });
+  const [route, setRouteState] = useState<AppRoute>(() => readInitialAppRoute());
   const [projects, setProjects] = useState<ContentProjectRecord[]>([]);
   const [runtimeSessionViewsByProjectId, setRuntimeSessionViewsByProjectId] = useState<Record<string, RuntimeSessionView>>({});
   const [clockRevision, setClockRevision] = useState(0);
+  const [adminPassword, setAdminPassword] = useState<string | undefined>(() => readStoredAdminPassword());
+  const [adminGateErrorText, setAdminGateErrorText] = useState<string | undefined>();
+  const [adminOverview, setAdminOverview] = useState<RuntimeAdminProjectHeartSummary[]>([]);
+  const [adminProjectDetailsById, setAdminProjectDetailsById] = useState<Record<string, RuntimeAdminProjectHeartDetails>>({});
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminRevision, setAdminRevision] = useState(0);
 
   function beginProjectMutation(projectId: string): number {
     const nextVersion = (projectMutationVersionRef.current[projectId] ?? 0) + 1;
@@ -49,6 +62,19 @@ export function App() {
   const activeRuntimeSessionSnapshot = activeRuntimeSessionView?.snapshot;
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const onPopState = () => {
+      setRouteState(readInitialAppRoute());
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
     void listRuntimeProjects().then((nextProjects) => {
       setProjects(nextProjects);
     }).catch((error) => {
@@ -61,6 +87,75 @@ export function App() {
       SERVER_RUNTIME_WEATHER_SOURCE.clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAdminRoute(route) || !adminPassword) {
+      return;
+    }
+
+    let canceled = false;
+    setAdminLoading(true);
+
+    void listRuntimeAdminHeartOverview(adminPassword).then(async (overviewResult) => {
+      if (canceled) {
+        return;
+      }
+
+      if (overviewResult.kind === 'unauthorized') {
+        clearStoredAdminPassword();
+        setAdminPassword(undefined);
+        setAdminGateErrorText('Password rejected by server.');
+        setAdminLoading(false);
+        return;
+      }
+
+      if (overviewResult.kind !== 'ok') {
+        setAdminGateErrorText('Unable to load admin analytics.');
+        setAdminLoading(false);
+        return;
+      }
+
+      setAdminOverview(overviewResult.value);
+
+      if (route.kind !== 'admin_project') {
+        setAdminLoading(false);
+        return;
+      }
+
+      const detailResult = await getRuntimeAdminHeartProject(route.projectId, adminPassword);
+
+      if (canceled) {
+        return;
+      }
+
+      if (detailResult.kind === 'unauthorized') {
+        clearStoredAdminPassword();
+        setAdminPassword(undefined);
+        setAdminGateErrorText('Password rejected by server.');
+        setAdminLoading(false);
+        return;
+      }
+
+      if (detailResult.kind === 'ok') {
+        setAdminProjectDetailsById((current) => ({
+          ...current,
+          [route.projectId]: detailResult.value,
+        }));
+      }
+
+      setAdminLoading(false);
+    }).catch((error) => {
+      console.error(error);
+      if (!canceled) {
+        setAdminGateErrorText('Unable to load admin analytics.');
+        setAdminLoading(false);
+      }
+    });
+
+    return () => {
+      canceled = true;
+    };
+  }, [route.kind, route.kind === 'admin_project' ? route.projectId : undefined, adminPassword, adminRevision]);
 
   useEffect(() => {
     if (route.kind !== 'project') {
@@ -280,12 +375,13 @@ export function App() {
       ...current,
       [projectId]: sessionView,
     }));
-    setRoute(
+    applyAppRoute(
       buildProjectRouteState(
         projectId,
         sessionView.snapshot.route,
         route.kind === 'project' && route.projectId === projectId ? route : undefined,
       ),
+      'replace',
     );
   }
 
@@ -310,9 +406,109 @@ export function App() {
     applyRuntimeSessionView(nextProjectId, sessionView);
   }
 
+  function applyAppRoute(nextRoute: AppRoute, historyMode: 'push' | 'replace' = 'push') {
+    setRouteState(nextRoute);
+    syncBrowserRoute(nextRoute, historyMode);
+  }
+
+  async function authenticateAdmin(password: string) {
+    const trimmedPassword = password.trim();
+
+    if (trimmedPassword.length === 0) {
+      setAdminGateErrorText('Enter the shared admin password.');
+      return;
+    }
+
+    setAdminLoading(true);
+    const overviewResult = await listRuntimeAdminHeartOverview(trimmedPassword);
+
+    if (overviewResult.kind === 'ok') {
+      setAdminPassword(trimmedPassword);
+      writeStoredAdminPassword(trimmedPassword);
+      setAdminGateErrorText(undefined);
+      setAdminOverview(overviewResult.value);
+      setAdminRevision((current) => current + 1);
+      setAdminLoading(false);
+      return;
+    }
+
+    setAdminLoading(false);
+    setAdminGateErrorText(overviewResult.kind === 'unauthorized' ? 'Password rejected by server.' : 'Unable to reach admin analytics.');
+  }
+
+  function signOutAdmin() {
+    clearStoredAdminPassword();
+    setAdminPassword(undefined);
+    setAdminGateErrorText(undefined);
+    setAdminOverview([]);
+    setAdminProjectDetailsById({});
+    applyAppRoute({ kind: 'admin_overview' }, 'replace');
+  }
+
+  async function handleAdminHeartReset(projectId: string) {
+    if (!adminPassword) {
+      return;
+    }
+
+    const result = await resetRuntimeAdminHeartProject(projectId, adminPassword);
+
+    if (result.kind === 'unauthorized') {
+      signOutAdmin();
+      setAdminGateErrorText('Password rejected by server.');
+      return;
+    }
+
+    if (result.kind === 'ok') {
+      setAdminRevision((current) => current + 1);
+    }
+  }
+
+  async function handlePublicHeart(projectId: string, nodeId: string, nextActive: boolean): Promise<boolean> {
+    return Boolean(await setRuntimeHeart(projectId, nodeId, nextActive));
+  }
+
+  if (isAdminRoute(route)) {
+    if (!adminPassword) {
+      return (
+        <AdminGateScreen
+          errorText={adminGateErrorText}
+          onBackHome={() => applyAppRoute({ kind: 'home' })}
+          onUnlock={(password) => {
+            void authenticateAdmin(password);
+          }}
+        />
+      );
+    }
+
+    if (route.kind === 'admin_project') {
+      return (
+        <AdminProjectScreen
+          isLoading={adminLoading}
+          project={adminProjectDetailsById[route.projectId]}
+          onBackOverview={() => applyAppRoute({ kind: 'admin_overview' })}
+          onResetHearts={() => {
+            void handleAdminHeartReset(route.projectId);
+          }}
+          onSignOut={signOutAdmin}
+        />
+      );
+    }
+
+    return (
+      <AdminOverviewScreen
+        isLoading={adminLoading}
+        projects={adminOverview}
+        onBackHome={() => applyAppRoute({ kind: 'home' })}
+        onOpenProject={(projectId) => applyAppRoute({ kind: 'admin_project', projectId })}
+        onSignOut={signOutAdmin}
+      />
+    );
+  }
+
   if (route.kind === 'home') {
     return (
       <HomeScreen
+        onEnterAdmin={() => applyAppRoute({ kind: 'admin_overview' })}
         projects={projects}
         onEnterProject={(nextProjectId) => {
           void openProjectSession(nextProjectId);
@@ -324,6 +520,7 @@ export function App() {
   if (!project || !projectId) {
     return (
       <HomeScreen
+        onEnterAdmin={() => applyAppRoute({ kind: 'admin_overview' })}
         projects={projects}
         onEnterProject={(nextProjectId) => void openProjectSession(nextProjectId)}
       />
@@ -357,7 +554,7 @@ export function App() {
       selectedPage={fullyEffectiveSelectedPage}
       selectedPageRenderKey={selectedPageRenderKey}
       selectedPageNavigationKey={selectedPageNavigationKey}
-      onBackHome={() => setRoute({ kind: 'home' })}
+      onBackHome={() => applyAppRoute({ kind: 'home' })}
       onResetRun={() => {
         if (!projectId || !activeRuntimeSessionSnapshot) {
           return;
@@ -379,6 +576,7 @@ export function App() {
       onSelectNode={(nodeId) => {
         void openProjectSession(projectId, nodeId);
       }}
+      onHeartNode={(nodeId, nextActive) => handlePublicHeart(projectId, nodeId, nextActive)}
       onAction={(action) => {
         void handleAction(action);
       }}
@@ -387,6 +585,95 @@ export function App() {
       }}
     />
   );
+}
+
+function isAdminRoute(route: AppRoute): route is Extract<AppRoute, { kind: 'admin_overview' | 'admin_project' }> {
+  return route.kind === 'admin_overview' || route.kind === 'admin_project';
+}
+
+function readInitialAppRoute(): AppRoute {
+  if (typeof window === 'undefined') {
+    return { kind: 'home' };
+  }
+
+  return parseAppRoutePath(window.location.pathname);
+}
+
+function parseAppRoutePath(pathname: string): AppRoute {
+  const adminProjectMatch = /^\/admin\/projects\/([^/]+)\/?$/.exec(pathname);
+
+  if (adminProjectMatch) {
+    return {
+      kind: 'admin_project',
+      projectId: decodeURIComponent(adminProjectMatch[1]),
+    };
+  }
+
+  if (/^\/admin\/?$/.test(pathname)) {
+    return { kind: 'admin_overview' };
+  }
+
+  return { kind: 'home' };
+}
+
+function syncBrowserRoute(route: AppRoute, historyMode: 'push' | 'replace'): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const nextPath = route.kind === 'admin_project'
+    ? `/admin/projects/${encodeURIComponent(route.projectId)}`
+    : route.kind === 'admin_overview'
+      ? '/admin'
+      : '/';
+
+  if (window.location.pathname === nextPath) {
+    return;
+  }
+
+  if (historyMode === 'replace') {
+    window.history.replaceState({}, '', nextPath);
+    return;
+  }
+
+  window.history.pushState({}, '', nextPath);
+}
+
+function readStoredAdminPassword(): string | undefined {
+  if (typeof window === 'undefined') {
+    return undefined;
+  }
+
+  try {
+    const value = window.sessionStorage.getItem(ADMIN_PASSWORD_STORAGE_KEY);
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeStoredAdminPassword(password: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(ADMIN_PASSWORD_STORAGE_KEY, password);
+  } catch {
+    // Ignore storage failures for the temporary admin gate.
+  }
+}
+
+function clearStoredAdminPassword(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.sessionStorage.removeItem(ADMIN_PASSWORD_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures for the temporary admin gate.
+  }
 }
 
 function getOptionalStringValue(record: object, key: string): string | undefined {

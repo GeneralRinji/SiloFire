@@ -4,10 +4,11 @@ import { HomeSplashArt } from './HomeSplashArt';
 
 interface HomeScreenProps {
   projects: ContentProjectRecord[];
+  onEnterAdmin?: () => void;
   onEnterProject: (projectId: string) => void;
 }
 
-export function HomeScreen({ projects, onEnterProject }: HomeScreenProps) {
+export function HomeScreen({ projects, onEnterAdmin, onEnterProject }: HomeScreenProps) {
   const featuredProject = projects[0];
 
   return (
@@ -33,6 +34,13 @@ export function HomeScreen({ projects, onEnterProject }: HomeScreenProps) {
               <p className="terminal-copy">
                 Narrative runtime experiments built with markdown-like content, explicit traversal semantics, and live shared state.
               </p>
+              {onEnterAdmin ? (
+                <div className="terminal-block__actions splash-home__admin-actions">
+                  <button type="button" className="terminal-link terminal-link--muted" onClick={onEnterAdmin}>
+                    admin/analytics
+                  </button>
+                </div>
+              ) : null}
             </div>
 
             {featuredProject ? (
@@ -41,11 +49,15 @@ export function HomeScreen({ projects, onEnterProject }: HomeScreenProps) {
                   enter/{featuredProject.folderName}
                 </button>
                 <div className="splash-home__cta-copy">
-                  <p className="terminal-badge">featured/{featuredProject.releaseStatus ?? featuredProject.status}</p>
+                  <div className="splash-home__badge-row">
+                    <p className="terminal-badge">featured/{featuredProject.releaseStatus ?? featuredProject.status}</p>
+                    {renderFreshnessBadge(featuredProject)}
+                  </div>
                   <p className="terminal-copy">{featuredProject.title}</p>
                   <div className="splash-home__detail-stack">
-                    {renderTagGroup('details', buildMetaTags(featuredProject), 'muted')}
-                    {renderTagGroup('tone', buildClassificationTags(featuredProject), 'muted')}
+                    {renderTagGroup('genre', buildClassificationTags(featuredProject), 'muted')}
+                    {renderTagGroup('notes', featuredProject.contentWarnings, 'warning')}
+                    {renderTagGroup('features', featuredProject.features, 'muted')}
                   </div>
                 </div>
               </div>
@@ -66,26 +78,23 @@ export function HomeScreen({ projects, onEnterProject }: HomeScreenProps) {
                   <p className="terminal-list__title">{project.title}</p>
                   <p className="terminal-copy">{project.description}</p>
                   <div className="splash-home__detail-stack splash-home__detail-stack--project">
-                    {renderTagGroup('details', buildMetaTags(project), 'muted')}
-                    {renderTagGroup('tone', buildClassificationTags(project), 'muted')}
+                    {renderTagGroup('genre', buildClassificationTags(project), 'muted')}
                     {renderTagGroup('notes', project.contentWarnings, 'warning')}
+                    {renderTagGroup('features', project.features, 'muted')}
                   </div>
-                  {project.tools.length > 0 ? (
-                    <div className="splash-home__tag-row">
-                      {project.tools.map((tool) => <span key={`${project.id}-tool-${tool}`} className="splash-home__tag">{tool}</span>)}
-                    </div>
-                  ) : null}
-                  {project.features.length > 0 ? (
-                    renderTagGroup('features', project.features, 'muted')
-                  ) : null}
                 </div>
 
                 <div className="terminal-list__actions splash-home__project-actions">
                   <div className="splash-home__status-card">
                     <p className="terminal-label">Status</p>
                     <p className="terminal-badge">{project.releaseStatus ?? project.status}</p>
+                    {renderFreshnessBadge(project)}
                   </div>
-                  <button type="button" className="terminal-link splash-home__project-link" onClick={() => onEnterProject(project.id)}>
+                  <button
+                    type="button"
+                    className="splash-home__cta splash-home__cta--project"
+                    onClick={() => onEnterProject(project.id)}
+                  >
                     enter/{project.folderName}
                   </button>
                 </div>
@@ -98,19 +107,21 @@ export function HomeScreen({ projects, onEnterProject }: HomeScreenProps) {
   );
 }
 
-function buildMetaTags(project: ContentProjectRecord): string[] {
-  return [
-    project.owner ? `owner/${project.owner}` : undefined,
-    project.version ? `version/${project.version}` : undefined,
-    project.publishedDate ? `published/${formatProjectDate(project.publishedDate)}` : undefined,
-  ].filter((value): value is string => Boolean(value));
-}
-
 function buildClassificationTags(project: ContentProjectRecord): string[] {
   return [
     project.genre,
     project.rating,
   ].filter((value): value is string => Boolean(value));
+}
+
+function renderFreshnessBadge(project: ContentProjectRecord) {
+  const freshnessLabel = buildFreshnessLabel(project.publishedDate);
+
+  if (!freshnessLabel) {
+    return null;
+  }
+
+  return <p className="terminal-badge terminal-badge--freshness">{freshnessLabel}</p>;
 }
 
 function renderTagGroup(
@@ -137,15 +148,65 @@ function renderTagGroup(
 }
 
 function formatProjectDate(value: string): string {
-  const parsed = Date.parse(value);
+  const parsed = parseProjectDate(value);
 
-  if (Number.isNaN(parsed)) {
+  if (!parsed) {
     return value;
   }
 
-  return new Date(parsed).toLocaleDateString(undefined, {
+  return parsed.toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
   });
+}
+
+function buildFreshnessLabel(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = parseProjectDate(value);
+
+  if (!parsed) {
+    return `published/${value}`;
+  }
+
+  const daysSincePublish = Math.max(0, getLocalDayOrdinal(new Date()) - getLocalDayOrdinal(parsed));
+  const formattedDate = formatProjectDate(value);
+
+  if (daysSincePublish <= 14) {
+    return `new/${formattedDate}`;
+  }
+
+  return `published/${formattedDate}`;
+}
+
+function parseProjectDate(value: string): Date | undefined {
+  const dateOnlyMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+
+  if (dateOnlyMatch) {
+    const [, yearText, monthText, dayText] = dateOnlyMatch;
+    const year = Number(yearText);
+    const monthIndex = Number(monthText) - 1;
+    const day = Number(dayText);
+    const date = new Date(year, monthIndex, day);
+
+    if (
+      date.getFullYear() === year
+      && date.getMonth() === monthIndex
+      && date.getDate() === day
+    ) {
+      return date;
+    }
+
+    return undefined;
+  }
+
+  const parsedMs = Date.parse(value);
+  return Number.isNaN(parsedMs) ? undefined : new Date(parsedMs);
+}
+
+function getLocalDayOrdinal(value: Date): number {
+  return Math.floor(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()) / (1000 * 60 * 60 * 24));
 }

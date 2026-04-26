@@ -26,6 +26,10 @@ For forward-looking ideas that are intentionally not hard contract yet, see `Pla
 
 For hosting-specific planning around `silofire.net`, see `DenoDeployPlan.md`.
 
+For the current website heart analytics and admin workflow, see `WebsiteHeartAnalyticsV1.md`.
+
+For a short operator-focused setup guide, see `../AdminAnalyticsQuickstart.md`.
+
 The v1 files should be treated as the firm working reference for the current system.
 
 They are not final forever, but they are intended to describe the behavior authors and implementers should rely on today.
@@ -215,6 +219,18 @@ Use this when you want:
 - the current feasibility answer for hosting on Deno Deploy
 - the migration shape from Vite dev middleware to a real server boundary
 - a reminder of what blocks production deployment today
+
+### `WebsiteHeartAnalyticsV1.md`
+
+Current website-level heart analytics and admin workflow.
+
+Use this when you want:
+
+- the public heart behavior contract
+- the admin route and password-gate behavior
+- the local dev setup for analytics and admin access
+- the production setup for Deno Deploy secrets and persistence
+- a quick AI handoff for where heart analytics live and what they should not assume
 
 ## About The V0 Files
 

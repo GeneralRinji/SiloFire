@@ -15,13 +15,25 @@ This project is a diorama-style town block built from a simple Mermaid-like neig
 
 ## State Sketch Status
 
-This project now includes an experimental sidecar state-authoring sketch.
+This project is the main reference example for the current sidecar-driven stateful content direction.
 
-These files are design examples only.
+Alongside Area, Gate, and Path markdown, demo04 includes sidecars for:
 
-They are not yet loaded by the current parser/runtime.
+- seeded world state
+- project predicates
+- ambient NPC behavior
+- project time configuration and schedules
+- project weather configuration
+- node-local event behavior
 
-The goal is to keep future state, NPC, and predicate authoring separate from the existing Area/Gate/Path markdown contract until the shapes are proven.
+These files should be treated as working reference material for the current runtime/session architecture.
+
+The important boundary is:
+
+- node markdown still owns structural navigation content and prose
+- sidecars own mutable state, predicates, schedules, NPC behavior, and other stateful rules
+
+Folder and file organization remain authoring conveniences only. Node identity and authored references still resolve by node id, not by path.
 
 ## Graph Shape
 

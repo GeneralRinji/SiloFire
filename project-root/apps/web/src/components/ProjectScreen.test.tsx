@@ -49,6 +49,8 @@ test('ProjectScreen renders a selected projected page without invalid component 
         controls: [],
       }}
       onBackHome={() => {}}
+      onResetRun={() => {}}
+      onHeartNode={async () => true}
       onSelectNode={() => {}}
       onAction={() => {}}
       onControl={() => {}}
@@ -59,5 +61,10 @@ test('ProjectScreen renders a selected projected page without invalid component 
   assert.match(html, /Visible Text/);
   assert.match(html, /Visible entry text\./);
   assert.match(html, /Recent/);
+  assert.match(html, /reset\/run/);
   assert.match(html, /Look around/);
+  assert.match(html, /terminal-heart-pane__glyph" aria-hidden="true">♡</);
+  assert.match(html, /Show this node some love \(analytics only\)/);
+  assert.ok(html.indexOf('Look around') < html.indexOf('Show this node some love (analytics only)'));
+  assert.match(html, /aria-pressed="false"/);
 });

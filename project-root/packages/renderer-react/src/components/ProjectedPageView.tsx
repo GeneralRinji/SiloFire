@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 import type { ProjectedAction, ProjectedControl, ProjectedLogEntry, ProjectedMarker, ProjectedProseBlock, ProjectionResult } from '../../../projection/src';
 import { NodeNavigation } from './NodeNavigation';
@@ -11,11 +11,12 @@ import { useAutoScrollToBottom } from './useAutoScrollToBottom';
 interface ProjectedPageViewProps {
   page: ProjectionResult;
   navigationKey?: string;
+  footerPane?: ReactNode;
   onAction?: (action: ProjectedAction) => void;
   onControl?: (control: ProjectedControl) => void;
 }
 
-export function ProjectedPageView({ page, navigationKey, onAction, onControl }: ProjectedPageViewProps) {
+export function ProjectedPageView({ page, navigationKey, footerPane, onAction, onControl }: ProjectedPageViewProps) {
   const pageShellRef = useRef<HTMLElement | null>(null);
   const recentLogRef = useRef<HTMLUListElement | null>(null);
   const [pageStartTimeMs, setPageStartTimeMs] = useState(() => Date.now());
@@ -75,6 +76,8 @@ export function ProjectedPageView({ page, navigationKey, onAction, onControl }: 
           baseDelayMs={navigationBaseDelayMs}
           pageStartTimeMs={pageStartTimeMs}
         />
+
+        {footerPane}
       </div>
     </PageShell>
   );

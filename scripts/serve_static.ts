@@ -1,10 +1,12 @@
 import type { ProjectedAction, ProjectedControl, ProjectedLogEntry } from '../project-root/packages/projection/src/index.ts';
 import type { RuntimeSessionState } from '../project-root/packages/runtime/src/index.ts';
-import { createRuntimeApiService, matchRuntimeApiRequest } from '../project-root/packages/runtime-server/src/index.ts';
+import { createRuntimeApiService, matchRuntimeApiRequest, type PersistedRuntimeSessionSnapshot } from '../project-root/packages/runtime-server/src/index.ts';
+import { DenoKvKeyValueStore, type DenoKvLike } from '../project-root/packages/storage-deno/src/index.ts';
 
 const DEFAULT_PORT = 8080;
 const DIST_DIR = new URL('../project-root/apps/web/dist/', import.meta.url);
 const INDEX_FILE = new URL('./index.html', DIST_DIR);
+const kv = await Deno.openKv();
 const runtimeApi = createRuntimeApiService({
   async readText(path) {
     const fileUrl = new URL(`./${path}`, new URL('../', import.meta.url));
@@ -42,7 +44,10 @@ const runtimeApi = createRuntimeApiService({
     }
   },
 }, {
+  adminPassword: Deno.env.get('SILOFIRE_ADMIN_PASSWORD') ?? undefined,
   contentRoot: 'project-root/packages/content',
+  heartStore: new DenoKvKeyValueStore<number>(kv as unknown as DenoKvLike<number>, ['silofire', 'analytics', 'hearts']),
+  snapshotStore: new DenoKvKeyValueStore<PersistedRuntimeSessionSnapshot>(kv as unknown as DenoKvLike<PersistedRuntimeSessionSnapshot>, ['silofire', 'runtime', 'snapshots']),
 });
 
 const port = resolvePort(Deno.env.get('PORT'));
@@ -56,6 +61,70 @@ Deno.serve({ port }, async (request) => {
   const runtimeApiMatch = matchRuntimeApiRequest(url.pathname + url.search);
 
   if (runtimeApiMatch) {
+    if (runtimeApiMatch.kind === 'heart_update') {
+      if (request.method !== 'POST' && request.method !== 'DELETE') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      try {
+        const heartCount = await runtimeApi.setHeart(runtimeApiMatch.projectId, runtimeApiMatch.nodeId, request.method === 'POST');
+
+        return heartCount
+          ? Response.json(heartCount)
+          : new Response('Node not found', { status: 404 });
+      } catch (error) {
+        console.error(error);
+        return new Response('Runtime API failed', { status: 500 });
+      }
+    }
+
+    if (runtimeApiMatch.kind === 'admin_heart_overview' || runtimeApiMatch.kind === 'admin_heart_project' || runtimeApiMatch.kind === 'admin_heart_reset') {
+      if (!runtimeApi.isAdminPasswordValid(request.headers.get('x-silofire-admin-password') ?? undefined)) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+
+      if (runtimeApiMatch.kind === 'admin_heart_overview') {
+        if (request.method !== 'GET') {
+          return new Response('Method Not Allowed', { status: 405 });
+        }
+
+        try {
+          return Response.json(await runtimeApi.listHeartAdminOverview());
+        } catch (error) {
+          console.error(error);
+          return new Response('Runtime API failed', { status: 500 });
+        }
+      }
+
+      if (runtimeApiMatch.kind === 'admin_heart_project') {
+        if (request.method !== 'GET') {
+          return new Response('Method Not Allowed', { status: 405 });
+        }
+
+        try {
+          const details = await runtimeApi.getHeartAdminProject(runtimeApiMatch.projectId);
+          return details
+            ? Response.json(details)
+            : new Response('Project not found', { status: 404 });
+        } catch (error) {
+          console.error(error);
+          return new Response('Runtime API failed', { status: 500 });
+        }
+      }
+
+      if (request.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      try {
+        await runtimeApi.resetProjectHearts(runtimeApiMatch.projectId);
+        return Response.json({ ok: true });
+      } catch (error) {
+        console.error(error);
+        return new Response('Runtime API failed', { status: 500 });
+      }
+    }
+
     if (runtimeApiMatch.kind === 'project_list') {
       if (request.method !== 'GET') {
         return new Response('Method Not Allowed', { status: 405 });
@@ -258,7 +327,7 @@ Deno.serve({ port }, async (request) => {
   const file = await readFileIfExists(candidate);
 
   if (file) {
-    return new Response(new Blob([file.bytes], { type: file.contentType }), {
+    return new Response(toArrayBuffer(file.bytes), {
       headers: {
         'content-type': file.contentType,
       },
@@ -271,7 +340,7 @@ Deno.serve({ port }, async (request) => {
     return new Response('Missing dist/index.html. Run `npm run build` first.', { status: 500 });
   }
 
-  return new Response(new Blob([spaFallback.bytes], { type: 'text/html; charset=utf-8' }), {
+  return new Response(toArrayBuffer(spaFallback.bytes), {
     headers: {
       'content-type': 'text/html; charset=utf-8',
     },
@@ -297,6 +366,10 @@ async function readFileIfExists(fileUrl: URL): Promise<{ bytes: Uint8Array; cont
 
     throw error;
   }
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return new Uint8Array(bytes).buffer;
 }
 
 function resolvePort(rawPort: string | undefined): number {
@@ -460,7 +533,7 @@ function getOptionalNestedNumberRecordValue(record: Record<string, unknown>, key
         ),
       ];
     }),
-  );
+  ) as Record<string, Record<string, number>>;
 }
 
 function getOptionalProjectedLogRecordValue(record: Record<string, unknown>, key: string): Record<string, ProjectedLogEntry[]> {

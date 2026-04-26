@@ -36,6 +36,7 @@ export interface RuntimeSessionView {
   offeredActions: ProjectedAction[];
   currentAreaVisitCount?: number;
   currentPathVisitCount?: number;
+  project?: RuntimeSessionProjectMetadata;
 }
 
 export interface RuntimeSessionProjectMetadata {

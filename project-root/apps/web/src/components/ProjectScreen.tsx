@@ -1,7 +1,9 @@
+import { useEffect, useState } from 'react';
 import type { ContentProjectRecord } from '../../../../packages/content';
 import type { ProjectedAction, ProjectedControl, ProjectionResult } from '../../../../packages/projection/src';
 import type { RuntimeAmbientNpcSnapshot } from '../runtimeAmbient';
 import { ProjectedPageView } from '../../../../packages/renderer-react/src/components/ProjectedPageView';
+import { PublicHeartPane } from './PublicHeartPane';
 
 export interface ProjectNodeLink {
   id: string;
@@ -39,6 +41,7 @@ interface ProjectScreenProps {
   selectedPageNavigationKey?: string;
   onBackHome: () => void;
   onResetRun?: () => void;
+  onHeartNode?: (nodeId: string, nextActive: boolean) => Promise<boolean>;
   onSelectNode: (nodeId: string) => void;
   onAction?: (action: ProjectedAction) => void;
   onControl?: (control: ProjectedControl) => void;
@@ -58,21 +61,41 @@ export function ProjectScreen({
   selectedPageNavigationKey,
   onBackHome,
   onResetRun,
+  onHeartNode,
   onSelectNode,
   onAction,
   onControl,
 }: ProjectScreenProps) {
-  const ambientNpcsHere = activeAmbientNpcs?.filter((npc) => selectedNodeId !== undefined && npc.nodeId === selectedNodeId) ?? [];
-  const ambientNpcById: Record<string, RuntimeAmbientNpcSnapshot> = Object.fromEntries((activeAmbientNpcs ?? []).map((npc) => [npc.id, npc]));
-  const objectDebugIds = Object.keys(sessionObjectStateById ?? {}).sort((left, right) => left.localeCompare(right));
-  const ambientDebugNpcIds = Array.from(new Set([
-    ...Object.keys(ambientNpcById),
-    ...Object.keys(sessionNpcStateById ?? {}),
-  ])).sort((left, right) => {
-    const leftName = ambientNpcById[left]?.displayName ?? left;
-    const rightName = ambientNpcById[right]?.displayName ?? right;
-    return leftName.localeCompare(rightName);
-  });
+  const [isHeartSaving, setIsHeartSaving] = useState(false);
+  const [activeHeartNodeIds, setActiveHeartNodeIds] = useState<Record<string, boolean>>({});
+
+  const activeHeartKey = selectedNodeId ? `${project.id}:${selectedNodeId}` : undefined;
+  const isHeartActive = activeHeartKey ? Boolean(activeHeartNodeIds[activeHeartKey]) : false;
+
+  useEffect(() => {
+    setIsHeartSaving(false);
+  }, [project.id, selectedNodeId]);
+
+  async function handleHeart() {
+    if (!selectedNodeId || !onHeartNode || !activeHeartKey || isHeartSaving) {
+      return;
+    }
+
+    const nextActive = !Boolean(activeHeartNodeIds[activeHeartKey]);
+
+    setIsHeartSaving(true);
+    const didSave = await onHeartNode(selectedNodeId, nextActive);
+    setIsHeartSaving(false);
+
+    if (!didSave) {
+      return;
+    }
+
+    setActiveHeartNodeIds((current) => ({
+      ...current,
+      [activeHeartKey]: nextActive,
+    }));
+  }
 
   return (
     <main className="terminal-shell terminal-shell--project">
@@ -114,96 +137,6 @@ export function ProjectScreen({
             </ul>
           ) : null}
         </section>
-        {activeClock?.phase ? (
-          <section className="terminal-block">
-            <p className="terminal-label">Time</p>
-            <p className="terminal-copy terminal-copy--strong">phase/{activeClock.phase}</p>
-            {activeClock.nodeId ? <p className="terminal-copy">selected-node/{activeClock.nodeId}</p> : null}
-            {activeClock.calendarId ? <p className="terminal-copy">calendar/{activeClock.calendarId}</p> : null}
-            {activeClock.nowLabel ? <p className="terminal-copy">server-now/{activeClock.nowLabel}</p> : null}
-            {activeClock.nextPhaseLabel ? <p className="terminal-copy">next-phase/{activeClock.nextPhaseLabel}</p> : null}
-            {activeClock.source ? <p className="terminal-copy">server-source/{activeClock.source}</p> : null}
-          </section>
-        ) : null}
-
-        {activeWeather?.kind || activeWeather?.patternId ? (
-          <section className="terminal-block">
-            <p className="terminal-label">Weather</p>
-            <p className="terminal-copy terminal-copy--strong">kind/{activeWeather.kind ?? 'unknown'}</p>
-            {activeWeather.intensity ? <p className="terminal-copy">intensity/{activeWeather.intensity}</p> : null}
-            {activeWeather.regionId ? <p className="terminal-copy">assigned-region/{activeWeather.regionId}</p> : null}
-            {activeWeather.patternId ? <p className="terminal-copy">pattern-id/{activeWeather.patternId}</p> : null}
-            {activeWeather.stepId ? <p className="terminal-copy">step-id/{activeWeather.stepId}</p> : null}
-            {activeWeather.source ? <p className="terminal-copy">server-source/{activeWeather.source}</p> : null}
-          </section>
-        ) : null}
-
-        {ambientDebugNpcIds.length > 0 ? (
-          <section className="terminal-block">
-            <p className="terminal-label">Ambient</p>
-            {selectedNodeId ? (
-              <>
-                <p className="terminal-copy terminal-copy--strong">here/{ambientNpcsHere.length > 0 ? ambientNpcsHere.map((npc) => npc.displayName ?? npc.id).join(', ') : 'none'}</p>
-                <p className="terminal-copy">selected-node/{selectedNodeId}</p>
-              </>
-            ) : null}
-            <ul className="terminal-list terminal-list--presence">
-              {ambientDebugNpcIds.map((npcId) => {
-                const npc = ambientNpcById[npcId];
-                const sessionNpcState = sessionNpcStateById?.[npcId];
-                const isHere = selectedNodeId !== undefined && npc?.nodeId === selectedNodeId;
-                const locationLabel = npc?.nodeId
-                  ? `live-node/${npc.nodeId}`
-                  : npc
-                    ? `live-route/${npc.previousNodeId ?? 'unknown'} -> ${npc.nextNodeId ?? 'unknown'}`
-                    : 'live-snapshot/pending';
-
-                return (
-                  <li key={npcId} className="terminal-list__item terminal-list__item--presence">
-                    <p className="terminal-copy terminal-copy--strong">
-                      {npc?.displayName ?? npcId}
-                      {isHere ? ' [here]' : ''}
-                    </p>
-                    <p className="terminal-copy">
-                      {locationLabel}
-                    </p>
-                    <p className="terminal-copy">
-                      server-session-location/{sessionNpcState?.location ?? 'none'}
-                    </p>
-                    <p className="terminal-copy">
-                      {npc?.behavior
-                        ? `live-movement-state/${npc.behavior}`
-                        : `server-session-behavior/${sessionNpcState?.behavior ?? 'none'}`}
-                    </p>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        ) : null}
-
-        {objectDebugIds.length > 0 ? (
-          <section className="terminal-block">
-            <p className="terminal-label">Objects</p>
-            <ul className="terminal-list terminal-list--presence">
-              {objectDebugIds.map((objectId) => {
-                const objectState = sessionObjectStateById?.[objectId] ?? {};
-                const fieldEntries = Object.entries(objectState);
-
-                return (
-                  <li key={objectId} className="terminal-list__item terminal-list__item--presence">
-                    <p className="terminal-copy terminal-copy--strong">{objectId}</p>
-                    {fieldEntries.map(([fieldName, fieldValue]) => (
-                      <p key={fieldName} className="terminal-copy">
-                        {fieldName}/{String(fieldValue)}
-                      </p>
-                    ))}
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        ) : null}
       </aside>
 
       <section className="terminal-stage">
@@ -212,6 +145,7 @@ export function ProjectScreen({
             key={selectedPageRenderKey}
             page={selectedPage}
             navigationKey={selectedPageNavigationKey}
+            footerPane={selectedNodeId && onHeartNode ? <PublicHeartPane active={isHeartActive} isSaving={isHeartSaving} onHeart={() => void handleHeart()} /> : undefined}
             onAction={onAction}
             onControl={onControl}
           />

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
 import { createRuntimeApiService, matchRuntimeApiRequest } from '../../packages/runtime-server/src';
@@ -9,8 +9,9 @@ import { createJsonValueCodec } from '../../packages/storage/src';
 const projectRoot = resolve(__dirname, '..', '..');
 const appNodeModules = resolve(__dirname, 'node_modules');
 const runtimeSnapshotRoot = resolve(projectRoot, '.silofire', 'runtime-snapshots');
+const runtimeHeartRoot = resolve(projectRoot, '.silofire', 'runtime-hearts');
 
-function createRuntimeClockApiPlugin() {
+function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
   const runtimeApi = createRuntimeApiService({
     async readText(path) {
       const absolutePath = resolve(projectRoot, path);
@@ -29,6 +30,8 @@ function createRuntimeClockApiPlugin() {
       }));
     },
   }, {
+    adminPassword,
+    heartStore: new NodeFileKeyValueStore(runtimeHeartRoot, createJsonValueCodec()),
     snapshotStore: new NodeFileKeyValueStore(runtimeSnapshotRoot, createJsonValueCodec()),
   });
 
@@ -41,6 +44,102 @@ function createRuntimeClockApiPlugin() {
 
         if (!match) {
           next();
+          return;
+        }
+
+        if (match.kind === 'heart_update') {
+          if (req.method !== 'POST' && req.method !== 'DELETE') {
+            res.statusCode = 405;
+            res.end('Method Not Allowed');
+            return;
+          }
+
+          void runtimeApi.setHeart(match.projectId, match.nodeId, req.method === 'POST').then((heartCount) => {
+            if (!heartCount) {
+              res.statusCode = 404;
+              res.end('Node not found');
+              return;
+            }
+
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(heartCount));
+          }).catch((error) => {
+            console.error(error);
+            res.statusCode = 500;
+            res.end('Runtime session API failed');
+          });
+          return;
+        }
+
+        if (match.kind === 'admin_heart_overview' || match.kind === 'admin_heart_project' || match.kind === 'admin_heart_reset') {
+          const adminPassword = getHeaderValue(req, 'x-silofire-admin-password');
+
+          if (!runtimeApi.isAdminPasswordValid(adminPassword)) {
+            res.statusCode = 401;
+            res.end('Unauthorized');
+            return;
+          }
+
+          if (match.kind === 'admin_heart_overview') {
+            if (req.method !== 'GET') {
+              res.statusCode = 405;
+              res.end('Method Not Allowed');
+              return;
+            }
+
+            void runtimeApi.listHeartAdminOverview().then((overview) => {
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify(overview));
+            }).catch((error) => {
+              console.error(error);
+              res.statusCode = 500;
+              res.end('Runtime session API failed');
+            });
+            return;
+          }
+
+          if (match.kind === 'admin_heart_project') {
+            if (req.method !== 'GET') {
+              res.statusCode = 405;
+              res.end('Method Not Allowed');
+              return;
+            }
+
+            void runtimeApi.getHeartAdminProject(match.projectId).then((details) => {
+              if (!details) {
+                res.statusCode = 404;
+                res.end('Project not found');
+                return;
+              }
+
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify(details));
+            }).catch((error) => {
+              console.error(error);
+              res.statusCode = 500;
+              res.end('Runtime session API failed');
+            });
+            return;
+          }
+
+          if (req.method !== 'POST') {
+            res.statusCode = 405;
+            res.end('Method Not Allowed');
+            return;
+          }
+
+          void runtimeApi.resetProjectHearts(match.projectId).then(() => {
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ ok: true }));
+          }).catch((error) => {
+            console.error(error);
+            res.statusCode = 500;
+            res.end('Runtime session API failed');
+          });
           return;
         }
 
@@ -421,6 +520,19 @@ function getOptionalStringValue(record: Record<string, unknown>, key: string): s
   return typeof value === 'string' ? value : undefined;
 }
 
+function getHeaderValue(
+  req: { headers?: Record<string, string | string[] | undefined> },
+  name: string,
+): string | undefined {
+  const value = req.headers?.[name] ?? req.headers?.[name.toLowerCase()];
+
+  if (Array.isArray(value)) {
+    return typeof value[0] === 'string' ? value[0] : undefined;
+  }
+
+  return typeof value === 'string' ? value : undefined;
+}
+
 function getRequiredStringValue(record: Record<string, unknown>, key: string): string {
   const value = getOptionalStringValue(record, key);
 
@@ -484,21 +596,26 @@ function getRequiredRouteValue(record: Record<string, unknown>): {
   };
 }
 
-export default defineConfig({
-  plugins: [createRuntimeClockApiPlugin(), react()],
-  resolve: {
-    alias: {
-      react: resolve(appNodeModules, 'react'),
-      'react/jsx-runtime': resolve(appNodeModules, 'react/jsx-runtime.js'),
-      'react/jsx-dev-runtime': resolve(appNodeModules, 'react/jsx-dev-runtime.js'),
-      'react-dom': resolve(appNodeModules, 'react-dom'),
-      'react-dom/client': resolve(appNodeModules, 'react-dom/client.js'),
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, __dirname, '');
+  const adminPassword = env.SILOFIRE_ADMIN_PASSWORD || process.env.SILOFIRE_ADMIN_PASSWORD;
+
+  return {
+    plugins: [createRuntimeClockApiPlugin(adminPassword), react()],
+    resolve: {
+      alias: {
+        react: resolve(appNodeModules, 'react'),
+        'react/jsx-runtime': resolve(appNodeModules, 'react/jsx-runtime.js'),
+        'react/jsx-dev-runtime': resolve(appNodeModules, 'react/jsx-dev-runtime.js'),
+        'react-dom': resolve(appNodeModules, 'react-dom'),
+        'react-dom/client': resolve(appNodeModules, 'react-dom/client.js'),
+      },
+      dedupe: ['react', 'react-dom'],
     },
-    dedupe: ['react', 'react-dom'],
-  },
-  server: {
-    fs: {
-      allow: [projectRoot],
+    server: {
+      fs: {
+        allow: [projectRoot],
+      },
     },
-  },
+  };
 });

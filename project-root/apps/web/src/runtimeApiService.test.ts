@@ -73,6 +73,22 @@ test('runtime api request matcher resolves session routes', () => {
   assert.deepEqual(matchRuntimeApiRequest('/api/runtime-projects'), {
     kind: 'project_list',
   });
+  assert.deepEqual(matchRuntimeApiRequest('/api/runtime-heart/demo04/title_screen'), {
+    kind: 'heart_update',
+    projectId: 'demo04',
+    nodeId: 'title_screen',
+  });
+  assert.deepEqual(matchRuntimeApiRequest('/api/runtime-admin/hearts'), {
+    kind: 'admin_heart_overview',
+  });
+  assert.deepEqual(matchRuntimeApiRequest('/api/runtime-admin/hearts/demo04'), {
+    kind: 'admin_heart_project',
+    projectId: 'demo04',
+  });
+  assert.deepEqual(matchRuntimeApiRequest('/api/runtime-admin/hearts/demo04/reset'), {
+    kind: 'admin_heart_reset',
+    projectId: 'demo04',
+  });
   assert.deepEqual(matchRuntimeApiRequest('/api/runtime-session/demo04/start'), {
     kind: 'session_create',
     projectId: 'demo04',
@@ -93,6 +109,85 @@ test('runtime api request matcher resolves session routes', () => {
     kind: 'session_reset',
     sessionId: 'session_1',
   });
+});
+
+test('runtime api heart analytics add, remove, rank, project detail, and reset work server-side', async () => {
+  const runtimeApi = createRuntimeApiService(new MemoryRuntimeStore(loadProjectFiles('demo04')), {
+    adminPassword: 'open-sesame',
+  });
+
+  assert.equal(runtimeApi.isAdminPasswordValid('wrong'), false);
+  assert.equal(runtimeApi.isAdminPasswordValid('open-sesame'), true);
+
+  const firstNorthHeart = await runtimeApi.setHeart('demo04', 'sidewalk_north', true);
+  const secondNorthHeart = await runtimeApi.setHeart('demo04', 'sidewalk_north', true);
+  const buildingHeart = await runtimeApi.setHeart('demo04', 'building04_groundfloor', true);
+  const removedNorthHeart = await runtimeApi.setHeart('demo04', 'sidewalk_north', false);
+  const removedMissingHeart = await runtimeApi.setHeart('demo04', 'title_screen', false);
+
+  assert.deepEqual(firstNorthHeart, {
+    projectId: 'demo04',
+    nodeId: 'sidewalk_north',
+    count: 1,
+  });
+  assert.deepEqual(secondNorthHeart, {
+    projectId: 'demo04',
+    nodeId: 'sidewalk_north',
+    count: 2,
+  });
+  assert.deepEqual(buildingHeart, {
+    projectId: 'demo04',
+    nodeId: 'building04_groundfloor',
+    count: 1,
+  });
+  assert.deepEqual(removedNorthHeart, {
+    projectId: 'demo04',
+    nodeId: 'sidewalk_north',
+    count: 1,
+  });
+  assert.deepEqual(removedMissingHeart, {
+    projectId: 'demo04',
+    nodeId: 'title_screen',
+    count: 0,
+  });
+  assert.equal(await runtimeApi.setHeart('demo04', 'missing_node', true), undefined);
+
+  const overview = await runtimeApi.listHeartAdminOverview();
+  assert.equal(overview[0]?.projectId, 'demo04');
+  assert.equal(overview[0]?.totalHearts, 2);
+
+  const details = await runtimeApi.getHeartAdminProject('demo04');
+
+  if (!details) {
+    throw new Error('Expected admin heart detail for demo04.');
+  }
+
+  assert.equal(details.totalHearts, 2);
+  assert.deepEqual(
+    details.nodes
+      .filter((node) => node.heartCount > 0)
+      .map((node) => ({ nodeId: node.nodeId, heartCount: node.heartCount }))
+      .sort((left, right) => left.nodeId.localeCompare(right.nodeId)),
+    [
+      { nodeId: 'building04_groundfloor', heartCount: 1 },
+      { nodeId: 'sidewalk_north', heartCount: 1 },
+    ],
+  );
+  assert.ok(details.nodes.some((node) => node.nodeId === 'title_screen'));
+  assert.ok(details.sessionObjectStateById?.building03_door);
+  assert.ok(details.sessionNpcStateById?.resident_01);
+
+  const resetResult = await runtimeApi.resetProjectHearts('demo04');
+  assert.equal(resetResult, true);
+
+  const resetDetails = await runtimeApi.getHeartAdminProject('demo04');
+
+  if (!resetDetails) {
+    throw new Error('Expected reset admin heart detail for demo04.');
+  }
+
+  assert.equal(resetDetails.totalHearts, 0);
+  assert.equal(resetDetails.nodes[0]?.heartCount, 0);
 });
 
 test('runtime api service exposes session-backed progression over project content', async () => {

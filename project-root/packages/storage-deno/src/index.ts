@@ -13,7 +13,10 @@ export interface DenoKvLike<TValue> {
   get(key: readonly unknown[]): Promise<DenoKvGetResult<TValue>>;
   set(key: readonly unknown[], value: TValue): Promise<unknown>;
   delete(key: readonly unknown[]): Promise<unknown>;
-  list(selector: { prefix: readonly unknown[] }): AsyncIterable<DenoKvListResult<TValue>>;
+  list(
+    selector: { prefix: readonly unknown[] } | { prefix: readonly unknown[]; end: readonly unknown[] },
+    options?: unknown,
+  ): AsyncIterable<DenoKvListResult<TValue>>;
 }
 
 export class DenoKvKeyValueStore<TValue> implements KeyValueStore<TValue> {

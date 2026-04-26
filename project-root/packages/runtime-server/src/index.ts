@@ -50,6 +50,10 @@ export interface RuntimeContentStore {
 
 export type RuntimeApiRouteMatch =
   | { kind: 'project_list' }
+  | { kind: 'heart_update'; projectId: string; nodeId: string }
+  | { kind: 'admin_heart_overview' }
+  | { kind: 'admin_heart_project'; projectId: string }
+  | { kind: 'admin_heart_reset'; projectId: string }
   | { kind: 'clock_snapshot'; projectId: string; nodeId?: string; nodeRegion?: string }
   | { kind: 'clock_stream'; projectId: string; nodeId?: string; nodeRegion?: string }
   | { kind: 'weather_stream'; projectId: string }
@@ -63,6 +67,11 @@ export type RuntimeApiRouteMatch =
 
 export interface RuntimeApiService {
   listProjects(): Promise<ContentProjectRecord[]>;
+  isAdminPasswordValid(password: string | undefined): boolean;
+  setHeart(projectId: string, nodeId: string, hearted: boolean): Promise<RuntimeHeartCount | undefined>;
+  listHeartAdminOverview(): Promise<RuntimeAdminProjectHeartSummary[]>;
+  getHeartAdminProject(projectId: string): Promise<RuntimeAdminProjectHeartDetails | undefined>;
+  resetProjectHearts(projectId: string): Promise<boolean>;
   getClockSnapshot(projectId: string, nodeId?: string, nodeRegion?: string): Promise<PreviewRuntimeClockSnapshot | undefined>;
   getWeatherProjectSnapshot(projectId: string): Promise<RuntimeWeatherProjectSnapshot | undefined>;
   getAmbientSnapshot(projectId: string): Promise<RuntimeAmbientSnapshot>;
@@ -78,10 +87,82 @@ export interface PersistedRuntimeSessionSnapshot extends Omit<RuntimeSessionSnap
   savedAt: number;
 }
 
+export interface RuntimeHeartCount {
+  projectId: string;
+  nodeId: string;
+  count: number;
+}
+
+export interface RuntimeAdminProjectHeartSummary {
+  projectId: string;
+  title: string;
+  totalHearts: number;
+  nodeCount: number;
+}
+
+export interface RuntimeAdminProjectHeartNodeDetails {
+  nodeId: string;
+  label: string;
+  heartCount: number;
+}
+
+export interface RuntimeAdminProjectHeartDetails {
+  projectId: string;
+  title: string;
+  totalHearts: number;
+  nodes: RuntimeAdminProjectHeartNodeDetails[];
+  nodeList: Array<{
+    nodeId: string;
+    label: string;
+  }>;
+  activeClock?: PreviewRuntimeClockSnapshot;
+  activeWeather?: RuntimeWeatherProjectSnapshot;
+  activeAmbient?: RuntimeAmbientSnapshot;
+  sessionNpcStateById?: Record<string, {
+    location?: string;
+    behavior?: string;
+  }>;
+  sessionObjectStateById?: Record<string, Record<string, string | number | boolean>>;
+}
+
 export function matchRuntimeApiRequest(url: string): RuntimeApiRouteMatch | undefined {
   if (/^\/api\/runtime-projects(?:\?.*)?$/.test(url)) {
     return {
       kind: 'project_list',
+    };
+  }
+
+  const adminHeartResetMatch = /^\/api\/runtime-admin\/hearts\/([^/?#]+)\/reset(?:\?.*)?$/.exec(url);
+
+  if (adminHeartResetMatch) {
+    return {
+      kind: 'admin_heart_reset',
+      projectId: decodeURIComponent(adminHeartResetMatch[1]),
+    };
+  }
+
+  const adminHeartProjectMatch = /^\/api\/runtime-admin\/hearts\/([^/?#]+)(?:\?.*)?$/.exec(url);
+
+  if (adminHeartProjectMatch) {
+    return {
+      kind: 'admin_heart_project',
+      projectId: decodeURIComponent(adminHeartProjectMatch[1]),
+    };
+  }
+
+  if (/^\/api\/runtime-admin\/hearts(?:\?.*)?$/.test(url)) {
+    return {
+      kind: 'admin_heart_overview',
+    };
+  }
+
+  const heartIncrementMatch = /^\/api\/runtime-heart\/([^/?#]+)\/([^/?#]+)(?:\?.*)?$/.exec(url);
+
+  if (heartIncrementMatch) {
+    return {
+      kind: 'heart_update',
+      projectId: decodeURIComponent(heartIncrementMatch[1]),
+      nodeId: decodeURIComponent(heartIncrementMatch[2]),
     };
   }
 
@@ -190,12 +271,16 @@ export function createRuntimeApiService(
     contentRoot?: string;
     now?: () => number;
     snapshotStore?: KeyValueStore<PersistedRuntimeSessionSnapshot>;
+    heartStore?: KeyValueStore<number>;
+    adminPassword?: string;
     clockSeedMs?: number;
   } = {},
 ): RuntimeApiService {
   const contentRoot = options.contentRoot ?? DEFAULT_CONTENT_ROOT;
   const now = options.now ?? (() => Date.now());
   const snapshotStore = options.snapshotStore ?? createMemorySnapshotStore();
+  const heartStore = options.heartStore ?? createMemoryValueStore<number>();
+  const adminPassword = options.adminPassword;
   const clockSeedMs = options.clockSeedMs ?? 0;
   const clockAnchorMsByProjectId = new Map<string, number>();
   const weatherAnchorMsByPatternKey = new Map<string, number>();
@@ -224,6 +309,113 @@ export function createRuntimeApiService(
       }));
 
       return projects.filter((project): project is ContentProjectRecord => Boolean(project));
+    },
+    isAdminPasswordValid(password) {
+      return typeof adminPassword === 'string' && adminPassword.length > 0 && password === adminPassword;
+    },
+    async setHeart(projectId, nodeId, hearted) {
+      const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
+      const projectMetadata = runtimeSessionService?.getProjectMetadata(projectId);
+      const nodeExists = projectMetadata?.nodes.some((node) => node.id === nodeId) ?? false;
+
+      if (!projectMetadata || !nodeExists) {
+        return undefined;
+      }
+
+      const heartKey = projectNodeHeartKey(projectId, nodeId);
+      const currentCount = await heartStore.get(heartKey) ?? 0;
+      const nextCount = hearted
+        ? currentCount + 1
+        : Math.max(0, currentCount - 1);
+
+      if (nextCount === 0) {
+        await heartStore.delete(heartKey);
+      } else {
+        await heartStore.set(heartKey, nextCount);
+      }
+
+      return {
+        projectId,
+        nodeId,
+        count: nextCount,
+      };
+    },
+    async listHeartAdminOverview() {
+      const entries = await store.readDirectory(contentRoot);
+      const projectIds = entries
+        .filter((entry) => !entry.isFile)
+        .map((entry) => entry.name)
+        .filter((projectId) => isContentProjectAvailable(projectId));
+
+      const summaries = await Promise.all(projectIds.map(async (projectId) => {
+        const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
+        const projectMetadata = runtimeSessionService?.getProjectMetadata(projectId);
+
+        if (!projectMetadata) {
+          return undefined;
+        }
+
+        return {
+          projectId,
+          title: buildContentProjectRecord(projectId, 'playable-demo').title,
+          totalHearts: await getProjectHeartTotal(projectId),
+          nodeCount: projectMetadata.nodes.length,
+        } satisfies RuntimeAdminProjectHeartSummary;
+      }));
+
+      return summaries
+        .filter((summary): summary is RuntimeAdminProjectHeartSummary => Boolean(summary))
+        .sort((left, right) => right.totalHearts - left.totalHearts || left.title.localeCompare(right.title));
+    },
+    async getHeartAdminProject(projectId) {
+      const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
+      const projectMetadata = runtimeSessionService?.getProjectMetadata(projectId);
+
+      if (!runtimeSessionService || !projectMetadata) {
+        return undefined;
+      }
+
+      const contentProjectRecord = buildContentProjectRecord(projectId, 'playable-demo');
+      const stateSeeds = await extractProjectStateSeeds(store, contentRoot, projectId);
+      const nodeHeartCounts = await listProjectHeartCounts(projectId);
+      const heartCountByNodeId = new Map(nodeHeartCounts.map((entry) => [entry.nodeId, entry.count]));
+      const activeClock = projectMetadata.startNodeId
+        ? await buildAdminClockSnapshot(projectId, projectMetadata, projectMetadata.startNodeId)
+        : undefined;
+      const activeWeather = await getWeatherProjectSnapshotForSession(projectId);
+      const activeAmbient = await collectAmbientSnapshot(projectId);
+
+      return {
+        projectId,
+        title: contentProjectRecord.title,
+        totalHearts: nodeHeartCounts.reduce((sum, entry) => sum + entry.count, 0),
+        nodes: projectMetadata.nodes
+          .map((node) => ({
+            nodeId: node.id,
+            label: node.label,
+            heartCount: heartCountByNodeId.get(node.id) ?? 0,
+          }))
+          .sort((left, right) => right.heartCount - left.heartCount || left.label.localeCompare(right.label)),
+        nodeList: projectMetadata.nodes.map((node) => ({
+          nodeId: node.id,
+          label: node.label,
+        })),
+        activeClock,
+        activeWeather,
+        activeAmbient,
+        sessionNpcStateById: stateSeeds.sessionNpcStateById,
+        sessionObjectStateById: stateSeeds.sessionObjectStateById,
+      };
+    },
+    async resetProjectHearts(projectId) {
+      let found = false;
+
+      for await (const entry of heartStore.list(projectHeartPrefix(projectId))) {
+        found = true;
+        await heartStore.delete(entry.key);
+      }
+
+      return found;
     },
     async getClockSnapshot(projectId, nodeId, nodeRegion) {
       const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
@@ -279,7 +471,7 @@ export function createRuntimeApiService(
       const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
       const sessionView = runtimeSessionService?.createSession(projectId, sessionOptions);
 
-      if (sessionView) {
+      if (sessionView && runtimeSessionService) {
         rememberSession(projectId, sessionView.snapshot.sessionId, runtimeSessionService);
       }
 
@@ -289,7 +481,7 @@ export function createRuntimeApiService(
       const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
       const sessionView = runtimeSessionService?.restoreSession(projectId, snapshot);
 
-      if (sessionView) {
+      if (sessionView && runtimeSessionService) {
         rememberSession(projectId, sessionView.snapshot.sessionId, runtimeSessionService);
       }
 
@@ -326,7 +518,7 @@ export function createRuntimeApiService(
           ? freshRuntimeSessionService.restoreSession(projectId, persistedSnapshot)
           : undefined;
 
-        if (sessionView && freshRuntimeSessionService) {
+        if (sessionView && freshRuntimeSessionService && projectId) {
           rememberSession(projectId, sessionView.snapshot.sessionId, freshRuntimeSessionService, sessionId);
         }
 
@@ -394,6 +586,61 @@ export function createRuntimeApiService(
 
   async function getRuntimeSessionServiceForSession(sessionId: string): Promise<RuntimeSessionService | undefined> {
     return runtimeSessionServicesBySessionId.get(sessionId);
+  }
+
+  async function getProjectHeartTotal(projectId: string): Promise<number> {
+    let total = 0;
+
+    for await (const entry of heartStore.list(projectHeartPrefix(projectId))) {
+      total += entry.value;
+    }
+
+    return total;
+  }
+
+  async function listProjectHeartCounts(projectId: string): Promise<RuntimeHeartCount[]> {
+    const counts: RuntimeHeartCount[] = [];
+
+    for await (const entry of heartStore.list(projectHeartPrefix(projectId))) {
+      const nodeId = entry.key.slice(projectHeartPrefix(projectId).length + 1);
+
+      counts.push({
+        projectId,
+        nodeId,
+        count: entry.value,
+      });
+    }
+
+    return counts;
+  }
+
+  async function buildAdminClockSnapshot(
+    projectId: string,
+    projectMetadata: RuntimeSessionProjectMetadata,
+    nodeId: string,
+  ): Promise<PreviewRuntimeClockSnapshot | undefined> {
+    if (!projectMetadata.timeSettings) {
+      return undefined;
+    }
+
+    ensureClockAnchor(projectId, projectMetadata);
+    const nodeRegion = projectMetadata.nodeRegionsById[nodeId];
+    const snapshot = resolveProjectClockSnapshot({
+      projectId,
+      timeSettings: projectMetadata.timeSettings,
+      defaultClock: projectMetadata.defaultClock,
+      nodeFoldersById: projectMetadata.nodeFoldersById,
+      nodeRegionsById: projectMetadata.nodeRegionsById,
+    }, now(), clockAnchorMsByProjectId, nodeId, nodeRegion);
+
+    if (!snapshot) {
+      return undefined;
+    }
+
+    return {
+      ...snapshot,
+      source: resolveClockSourceLabel(projectMetadata.timeSettings, projectMetadata.defaultClock),
+    };
   }
 
   async function createFreshRuntimeSessionService(projectId: string): Promise<RuntimeSessionService | undefined> {
@@ -741,6 +988,40 @@ function createMemorySnapshotStore(): KeyValueStore<PersistedRuntimeSessionSnaps
   };
 }
 
+function createMemoryValueStore<TValue>(): KeyValueStore<TValue> {
+  const values = new Map<string, TValue>();
+
+  return {
+    async get(key) {
+      return values.get(key);
+    },
+    async set(key, value) {
+      values.set(key, value);
+    },
+    async delete(key) {
+      values.delete(key);
+    },
+    async has(key) {
+      return values.has(key);
+    },
+    async *list(prefix) {
+      for (const [key, value] of values.entries()) {
+        if (!prefix || key === prefix || key.startsWith(`${prefix}/`)) {
+          yield { key, value };
+        }
+      }
+    },
+  };
+}
+
+function projectHeartPrefix(projectId: string): string {
+  return `analytics/hearts/${projectId}`;
+}
+
+function projectNodeHeartKey(projectId: string, nodeId: string): string {
+  return `${projectHeartPrefix(projectId)}/${nodeId}`;
+}
+
 function projectSnapshotKey(projectId: string): string {
   return `projects/${projectId}/snapshot`;
 }
@@ -917,7 +1198,7 @@ function mergeAmbientNpcLocations(
 
   return {
     ...sessionState,
-    npcs: nextNpcs,
+    npcs: nextNpcs as RuntimeSessionSnapshot['sessionState']['npcs'],
   };
 }
 
@@ -989,6 +1270,8 @@ function buildRuntimeScheduleLogEntries(args: {
     return [];
   }
 
+  const snapshot = args.snapshot;
+
   return Object.entries(schedules).flatMap(([scheduleId, schedule]) => {
     if (!schedule.actor?.text?.length || schedule.lane !== 'recent' || schedule.trigger.kind !== 'phase') {
       return [];
@@ -1002,15 +1285,15 @@ function buildRuntimeScheduleLogEntries(args: {
       return [];
     }
 
-    if (!matchesRuntimeSchedulePhase(args.projectMetadata, args.currentNodeId, args.snapshot, schedule.trigger.phaseId, schedule.trigger.phaseGroup)) {
+    if (!matchesRuntimeSchedulePhase(args.projectMetadata, args.currentNodeId, snapshot, schedule.trigger.phaseId, schedule.trigger.phaseGroup)) {
       return [];
     }
 
-    if (!shouldAnnounceRuntimeScheduleEntry(args.previousNodeId, args.currentNodeId, args.previousSnapshot, args.snapshot, schedule.trigger.phaseId, schedule.trigger.phaseGroup, args.projectMetadata)) {
+    if (!shouldAnnounceRuntimeScheduleEntry(args.previousNodeId, args.currentNodeId, args.previousSnapshot, snapshot, schedule.trigger.phaseId, schedule.trigger.phaseGroup, args.projectMetadata)) {
       return [];
     }
 
-    return [createRuntimeScheduleLogEntry(scheduleId, schedule.actor.text, args.snapshot.nowMs ?? 0)];
+    return [createRuntimeScheduleLogEntry(scheduleId, schedule.actor.text, snapshot.nowMs ?? 0)];
   });
 }
 
@@ -1254,6 +1537,67 @@ async function extractNpcStateSeeds(
       paused: typeof state.paused === 'boolean' ? state.paused : undefined,
     }];
   }));
+}
+
+async function extractProjectStateSeeds(
+  store: RuntimeContentStore,
+  contentRoot: string,
+  projectId: string,
+): Promise<{
+  sessionNpcStateById?: Record<string, { location?: string; behavior?: string }>;
+  sessionObjectStateById?: Record<string, Record<string, string | number | boolean>>;
+}> {
+  const statePath = joinPath(contentRoot, projectId, 'state', 'world.yaml');
+  const stateSource = await store.readText(statePath);
+
+  if (!stateSource) {
+    return {};
+  }
+
+  const parsedState = parseStateSidecar(stateSource, statePath);
+  const npcsValue = parsedState.value?.npcs;
+  const objectsValue = parsedState.value?.objects;
+
+  const sessionNpcStateById = npcsValue && typeof npcsValue === 'object' && !Array.isArray(npcsValue)
+    ? Object.fromEntries(
+        Object.entries(npcsValue).map(([npcId, value]) => {
+          const npcState = value && typeof value === 'object' && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : {};
+
+          return [npcId, {
+            location: typeof npcState.location === 'string' ? npcState.location : undefined,
+            behavior: typeof npcState.behavior === 'string' ? npcState.behavior : undefined,
+          }];
+        }),
+      )
+    : undefined;
+
+  const sessionObjectStateById = objectsValue && typeof objectsValue === 'object' && !Array.isArray(objectsValue)
+    ? Object.fromEntries(
+        Object.entries(objectsValue)
+          .map(([objectId, value]) => {
+            const objectState = value && typeof value === 'object' && !Array.isArray(value)
+              ? (value as Record<string, unknown>)
+              : {};
+            const visibleFields = Object.fromEntries(
+              Object.entries(objectState).filter(([, fieldValue]) => (
+                typeof fieldValue === 'string'
+                || typeof fieldValue === 'number'
+                || typeof fieldValue === 'boolean'
+              )),
+            );
+
+            return [objectId, visibleFields];
+          })
+          .filter(([, objectState]) => Object.keys(objectState).length > 0),
+      )
+    : undefined;
+
+  return {
+    sessionNpcStateById,
+    sessionObjectStateById,
+  };
 }
 
 function resolveClockSourceLabel(

@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --import tsx --test src/contentRuntime.test.ts src/runtimeClock.test.ts src/runtimeAmbient.test.ts src/runtimeWeather.test.ts src/projectSession.test.ts src/phaseEntry.test.ts src/runtimeSessionService.test.ts src/runtimeApiService.test.ts src/runtimeSessionApi.test.ts src/components/ProjectScreen.test.tsx",
+    "test": "node --import tsx --test src/contentRuntime.test.ts src/runtimeClock.test.ts src/runtimeAmbient.test.ts src/runtimeWeather.test.ts src/projectSession.test.ts src/phaseEntry.test.ts src/runtimeSessionService.test.ts src/runtimeApiService.test.ts src/runtimeSessionApi.test.ts src/runtimeAdminApi.test.ts src/components/ProjectScreen.test.tsx src/components/AdminScreen.test.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
