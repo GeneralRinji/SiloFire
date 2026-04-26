@@ -1,3 +1,5 @@
+import type { ProjectedAction, ProjectedControl, ProjectedLogEntry } from '../project-root/packages/projection/src/index.ts';
+import type { RuntimeSessionState } from '../project-root/packages/runtime/src/index.ts';
 import { createRuntimeApiService, matchRuntimeApiRequest } from '../project-root/packages/runtime-server/src/index.ts';
 
 const DEFAULT_PORT = 8080;
@@ -54,7 +56,159 @@ Deno.serve({ port }, async (request) => {
   const runtimeApiMatch = matchRuntimeApiRequest(url.pathname + url.search);
 
   if (runtimeApiMatch) {
+    if (runtimeApiMatch.kind === 'project_list') {
+      if (request.method !== 'GET') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      try {
+        return Response.json(await runtimeApi.listProjects());
+      } catch (error) {
+        console.error(error);
+        return new Response('Runtime API failed', { status: 500 });
+      }
+    }
+
+    if (runtimeApiMatch.kind === 'session_create') {
+      if (request.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      try {
+        const body = await readJsonBody(request);
+        const sessionView = await runtimeApi.createSession(runtimeApiMatch.projectId, {
+          nodeId: getOptionalStringValue(body, 'nodeId'),
+          pathDirection: getOptionalPathDirectionValue(body, 'pathDirection'),
+          pathBeatIndex: getOptionalNumberValue(body, 'pathBeatIndex'),
+        });
+
+        return sessionView
+          ? Response.json(sessionView)
+          : new Response('Session could not be created', { status: 404 });
+      } catch (error) {
+        console.error(error);
+        return new Response('Runtime API failed', { status: 500 });
+      }
+    }
+
+    if (runtimeApiMatch.kind === 'session_restore') {
+      if (request.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      try {
+        const body = await readJsonBody(request);
+        const sessionView = await runtimeApi.restoreSession(runtimeApiMatch.projectId, {
+          projectId: getRequiredStringValue(body, 'projectId'),
+          route: getRequiredRouteValue(body),
+          areaVisitCounts: getOptionalNumberRecordValue(body, 'areaVisitCounts'),
+          pathVisitCounts: getOptionalNumberRecordValue(body, 'pathVisitCounts'),
+          recentLogByNodeId: getOptionalProjectedLogRecordValue(body, 'recentLogByNodeId'),
+          actionAttemptsByNodeId: getOptionalNestedNumberRecordValue(body, 'actionAttemptsByNodeId'),
+          sessionState: getOptionalRuntimeSessionStateValue(body, 'sessionState'),
+        });
+
+        return sessionView
+          ? Response.json(sessionView)
+          : new Response('Session could not be restored', { status: 404 });
+      } catch (error) {
+        console.error(error);
+        return new Response('Runtime API failed', { status: 500 });
+      }
+    }
+
+    if (runtimeApiMatch.kind === 'session_snapshot') {
+      if (request.method !== 'GET') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      try {
+        const sessionView = await runtimeApi.getSession(runtimeApiMatch.sessionId);
+        return sessionView
+          ? Response.json(sessionView)
+          : new Response('Session not found', { status: 404 });
+      } catch (error) {
+        console.error(error);
+        return new Response('Runtime API failed', { status: 500 });
+      }
+    }
+
+    if (runtimeApiMatch.kind === 'session_action') {
+      if (request.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      try {
+        const body = await readJsonBody(request);
+        const sessionView = await runtimeApi.applySessionAction(runtimeApiMatch.sessionId, {
+          id: getRequiredStringValue(body, 'id'),
+          kind: getRequiredActionKindValue(body, 'kind'),
+          label: getRequiredStringValue(body, 'label'),
+          key: getOptionalStringValue(body, 'key'),
+          keyLabel: getOptionalStringValue(body, 'keyLabel'),
+          meta: getOptionalStringValue(body, 'meta'),
+          targetId: getOptionalStringValue(body, 'targetId'),
+        });
+
+        return sessionView
+          ? Response.json(sessionView)
+          : new Response('Session not found', { status: 404 });
+      } catch (error) {
+        console.error(error);
+        return new Response('Runtime API failed', { status: 500 });
+      }
+    }
+
+    if (runtimeApiMatch.kind === 'session_control') {
+      if (request.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      try {
+        const body = await readJsonBody(request);
+        const sessionView = await runtimeApi.applySessionControl(runtimeApiMatch.sessionId, {
+          id: getRequiredStringValue(body, 'id'),
+          kind: getRequiredControlKindValue(body, 'kind'),
+          label: getRequiredStringValue(body, 'label'),
+          key: getOptionalStringValue(body, 'key'),
+          keyLabel: getOptionalStringValue(body, 'keyLabel'),
+        });
+
+        return sessionView
+          ? Response.json(sessionView)
+          : new Response('Session not found', { status: 404 });
+      } catch (error) {
+        console.error(error);
+        return new Response('Runtime API failed', { status: 500 });
+      }
+    }
+
+    if (runtimeApiMatch.kind === 'session_reset') {
+      if (request.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      try {
+        const body = await readJsonBody(request);
+        const sessionView = await runtimeApi.resetSession(
+          runtimeApiMatch.sessionId,
+          getOptionalStringValue(body, 'destinationNodeId'),
+        );
+
+        return sessionView
+          ? Response.json(sessionView)
+          : new Response('Session not found', { status: 404 });
+      } catch (error) {
+        console.error(error);
+        return new Response('Runtime API failed', { status: 500 });
+      }
+    }
+
     if (runtimeApiMatch.kind === 'clock_snapshot') {
+      if (request.method !== 'GET') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
       const snapshot = await runtimeApi.getClockSnapshot(runtimeApiMatch.projectId, runtimeApiMatch.nodeId, runtimeApiMatch.nodeRegion);
       return snapshot
         ? Response.json(snapshot)
@@ -104,7 +258,7 @@ Deno.serve({ port }, async (request) => {
   const file = await readFileIfExists(candidate);
 
   if (file) {
-    return new Response(file.bytes, {
+    return new Response(new Blob([file.bytes], { type: file.contentType }), {
       headers: {
         'content-type': file.contentType,
       },
@@ -117,7 +271,7 @@ Deno.serve({ port }, async (request) => {
     return new Response('Missing dist/index.html. Run `npm run build` first.', { status: 500 });
   }
 
-  return new Response(spaFallback.bytes, {
+  return new Response(new Blob([spaFallback.bytes], { type: 'text/html; charset=utf-8' }), {
     headers: {
       'content-type': 'text/html; charset=utf-8',
     },
@@ -234,4 +388,131 @@ function createSseStream(
       // Request abort handles cleanup.
     },
   });
+}
+
+async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
+  if (!request.body) {
+    return {};
+  }
+
+  const parsed = await request.json();
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+}
+
+function getOptionalStringValue(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function getRequiredStringValue(record: Record<string, unknown>, key: string): string {
+  const value = getOptionalStringValue(record, key);
+
+  if (value === undefined) {
+    throw new Error(`Missing required string field: ${key}`);
+  }
+
+  return value;
+}
+
+function getOptionalNumberValue(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function getOptionalNumberRecordValue(record: Record<string, unknown>, key: string): Record<string, number> {
+  const value = record[key];
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entryValue]) => typeof entryValue === 'number' && Number.isFinite(entryValue)),
+  );
+}
+
+function getOptionalRecordValue(record: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = record[key];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function getOptionalNestedNumberRecordValue(record: Record<string, unknown>, key: string): Record<string, Record<string, number>> {
+  const value = record[key];
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([entryKey, entryValue]) => {
+      if (!entryValue || typeof entryValue !== 'object' || Array.isArray(entryValue)) {
+        return [entryKey, {}];
+      }
+
+      return [
+        entryKey,
+        Object.fromEntries(
+          Object.entries(entryValue).filter(([, nestedValue]) => typeof nestedValue === 'number' && Number.isFinite(nestedValue)),
+        ),
+      ];
+    }),
+  );
+}
+
+function getOptionalProjectedLogRecordValue(record: Record<string, unknown>, key: string): Record<string, ProjectedLogEntry[]> {
+  return getOptionalRecordValue(record, key) as Record<string, ProjectedLogEntry[]>;
+}
+
+function getOptionalRuntimeSessionStateValue(record: Record<string, unknown>, key: string): RuntimeSessionState {
+  return getOptionalRecordValue(record, key) as RuntimeSessionState;
+}
+
+function getOptionalPathDirectionValue(record: Record<string, unknown>, key: string): 'forward' | 'backward' | undefined {
+  const value = record[key];
+  return value === 'forward' || value === 'backward' ? value : undefined;
+}
+
+function getRequiredRouteValue(record: Record<string, unknown>): {
+  nodeId?: string;
+  pathDirection?: 'forward' | 'backward';
+  pathBeatIndex?: number;
+  runNonce: number;
+} {
+  const routeRecord = getOptionalRecordValue(record, 'route');
+  const runNonce = getOptionalNumberValue(routeRecord, 'runNonce');
+
+  if (runNonce === undefined) {
+    throw new Error('Missing required route.runNonce');
+  }
+
+  return {
+    nodeId: getOptionalStringValue(routeRecord, 'nodeId'),
+    pathDirection: getOptionalPathDirectionValue(routeRecord, 'pathDirection'),
+    pathBeatIndex: getOptionalNumberValue(routeRecord, 'pathBeatIndex'),
+    runNonce,
+  };
+}
+
+function getRequiredActionKindValue(record: Record<string, unknown>, key: string): ProjectedAction['kind'] {
+  const value = record[key];
+
+  if (value === 'exit' || value === 'choice' || value === 'poi' || value === 'gate_action') {
+    return value;
+  }
+
+  throw new Error(`Missing required action kind: ${key}`);
+}
+
+function getRequiredControlKindValue(record: Record<string, unknown>, key: string): ProjectedControl['kind'] {
+  const value = record[key];
+
+  if (value === 'back' || value === 'continue' || value === 'skip') {
+    return value;
+  }
+
+  throw new Error(`Missing required control kind: ${key}`);
 }

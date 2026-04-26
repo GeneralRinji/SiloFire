@@ -193,16 +193,6 @@ export function App() {
           .filter(([, objectState]) => Object.keys(objectState).length > 0),
       )
     : undefined;
-  const pageRevisionKey = JSON.stringify({
-    phase: activeClock?.phase,
-    weather: activeWeather ? {
-      patternId: activeWeather.patternId,
-      stepId: activeWeather.stepId,
-      kind: activeWeather.kind,
-      intensity: activeWeather.intensity,
-    } : undefined,
-    sessionState: currentSessionState,
-  });
   const selectedPage = activeRuntimeSessionView?.page;
   const offeredActions = activeRuntimeSessionView?.offeredActions ?? [];
   const fullyEffectiveSelectedPage = appendOfferedActions(selectedPage, offeredActions);
@@ -215,16 +205,7 @@ export function App() {
     pathBeatIndex: currentPathBeatIndex,
     runNonce: currentRunNonce,
   });
-  const selectedPageNavigationKey = buildProjectedPageRenderKey({
-    projectId,
-    nodeId: currentNodeId,
-    pathDirection: currentPathDirection,
-    areaVisitCount: currentAreaVisitCount,
-    pathVisitCount: currentPathVisitCount,
-    pathBeatIndex: currentPathBeatIndex,
-    runNonce: currentRunNonce,
-    revisionKey: pageRevisionKey,
-  });
+  const selectedPageNavigationKey = selectedPageRenderKey;
 
   async function handleAction(action: ProjectedAction) {
     if (!projectId || !currentNodeId) {

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { forwardRef, type ReactNode } from 'react';
 
 interface PageShellProps {
   eyebrow: string;
@@ -7,9 +7,12 @@ interface PageShellProps {
   children: ReactNode;
 }
 
-export function PageShell({ eyebrow, title, tagline, children }: PageShellProps) {
+export const PageShell = forwardRef<HTMLElement, PageShellProps>(function PageShell(
+  { eyebrow, title, tagline, children },
+  ref,
+) {
   return (
-    <main className="page-shell">
+    <main ref={ref} className="page-shell">
       <header className="hero-header">
         <p className="hero-header__eyebrow">{eyebrow}</p>
         {title ? <h1 className="hero-header__title">{title}</h1> : null}
@@ -18,4 +21,4 @@ export function PageShell({ eyebrow, title, tagline, children }: PageShellProps)
       <div className="page-shell__body">{children}</div>
     </main>
   );
-}
+});

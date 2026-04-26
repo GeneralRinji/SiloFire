@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import type { ProjectedAction, ProjectedControl, ProjectedLogEntry, ProjectedMarker, ProjectedProseBlock, ProjectionResult } from '../../../projection/src';
 import { NodeNavigation } from './NodeNavigation';
@@ -16,6 +16,7 @@ interface ProjectedPageViewProps {
 }
 
 export function ProjectedPageView({ page, navigationKey, onAction, onControl }: ProjectedPageViewProps) {
+  const pageShellRef = useRef<HTMLElement | null>(null);
   const recentLogRef = useRef<HTMLUListElement | null>(null);
   const [pageStartTimeMs, setPageStartTimeMs] = useState(() => Date.now());
 
@@ -25,6 +26,14 @@ export function ProjectedPageView({ page, navigationKey, onAction, onControl }: 
       : '';
 
   useAutoScrollToBottom(recentLogRef.current, page.kind === 'page' && Boolean(page.recentLog && page.recentLog.length > 0), recentLogKey);
+
+  useLayoutEffect(() => {
+    if (!navigationKey) {
+      return;
+    }
+
+    pageShellRef.current?.scrollIntoView({ block: 'start' });
+  }, [navigationKey]);
 
   useEffect(() => {
     setPageStartTimeMs(Date.now());
@@ -43,7 +52,7 @@ export function ProjectedPageView({ page, navigationKey, onAction, onControl }: 
   const navigationBaseDelayMs = getNavigationBaseDelayMs(page.proseBlocks);
 
   return (
-    <PageShell eyebrow={`${page.nodeKind} / projected page`} title={page.title} tagline={page.tagline}>
+    <PageShell ref={pageShellRef} eyebrow={`${page.nodeKind} / projected page`} title={page.title} tagline={page.tagline}>
       <div className="panel-stack">
         <ProseBlocks blocks={page.proseBlocks} />
 
