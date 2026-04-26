@@ -1,8 +1,8 @@
 {
-  "unstable": ["sloppy-imports"],
+  "unstable": ["sloppy-imports", "kv"],
   "tasks": {
     "build:web": "npm run build",
-    "serve:static": "deno run --unstable-sloppy-imports --allow-read --allow-net --allow-env ./scripts/serve_static.ts",
+    "serve:static": "deno run --unstable-sloppy-imports --unstable-kv --allow-read --allow-net --allow-env ./scripts/serve_static.ts",
     "serve": "deno task build:web && deno task serve:static",
     "deploy:create": "deno deploy create --org rinjistudios --app rinjistudios --source local --region global",
     "deploy": "deno task build:web && deno deploy --config ./deno.json --org rinjistudios --app rinjistudios --prod"
