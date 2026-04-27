@@ -1,6 +1,11 @@
 import type { ProjectedAction, ProjectedControl, ProjectedLogEntry } from '../project-root/packages/projection/src/index.ts';
 import type { RuntimeSessionState } from '../project-root/packages/runtime/src/index.ts';
-import { createRuntimeApiService, matchRuntimeApiRequest, type PersistedRuntimeSessionSnapshot } from '../project-root/packages/runtime-server/src/index.ts';
+import {
+  createRuntimeApiService,
+  matchRuntimeApiRequest,
+  type PersistedRuntimeSessionSnapshot,
+  type SiteAnnouncementRecord,
+} from '../project-root/packages/runtime-server/src/index.ts';
 import { DenoKvKeyValueStore, type DenoKvLike } from '../project-root/packages/storage-deno/src/index.ts';
 
 const DEFAULT_PORT = 8080;
@@ -48,7 +53,9 @@ const runtimeApi = createRuntimeApiService({
   contentRoot: 'project-root/packages/content',
   heartStore: new DenoKvKeyValueStore<number>(kv as unknown as DenoKvLike<number>, ['silofire', 'analytics', 'hearts']),
   snapshotStore: new DenoKvKeyValueStore<PersistedRuntimeSessionSnapshot>(kv as unknown as DenoKvLike<PersistedRuntimeSessionSnapshot>, ['silofire', 'runtime', 'snapshots']),
+  siteAnnouncementStore: new DenoKvKeyValueStore<SiteAnnouncementRecord>(kv as unknown as DenoKvLike<SiteAnnouncementRecord>, ['silofire', 'site', 'announcements']),
 });
+const siteAnnouncementStream = createSiteAnnouncementStreamController(async () => await runtimeApi.getSiteAnnouncementSnapshot());
 
 const port = resolvePort(Deno.env.get('PORT'));
 
@@ -61,6 +68,27 @@ Deno.serve({ port }, async (request) => {
   const runtimeApiMatch = matchRuntimeApiRequest(url.pathname + url.search);
 
   if (runtimeApiMatch) {
+    if (runtimeApiMatch.kind === 'site_announcement_stream') {
+      if (request.method !== 'GET') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      return siteAnnouncementStream.connect(request);
+    }
+
+    if (runtimeApiMatch.kind === 'site_announcement_snapshot') {
+      if (request.method !== 'GET') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      try {
+        return Response.json(await runtimeApi.getSiteAnnouncementSnapshot());
+      } catch (error) {
+        console.error(error);
+        return new Response('Runtime API failed', { status: 500 });
+      }
+    }
+
     if (runtimeApiMatch.kind === 'heart_update') {
       if (request.method !== 'POST' && request.method !== 'DELETE') {
         return new Response('Method Not Allowed', { status: 405 });
@@ -78,9 +106,83 @@ Deno.serve({ port }, async (request) => {
       }
     }
 
-    if (runtimeApiMatch.kind === 'admin_heart_overview' || runtimeApiMatch.kind === 'admin_heart_project' || runtimeApiMatch.kind === 'admin_heart_reset') {
+    if (
+      runtimeApiMatch.kind === 'admin_heart_overview'
+      || runtimeApiMatch.kind === 'admin_heart_project'
+      || runtimeApiMatch.kind === 'admin_heart_reset'
+      || runtimeApiMatch.kind === 'admin_site_announcement_snapshot'
+      || runtimeApiMatch.kind === 'admin_site_announcement_item'
+    ) {
       if (!runtimeApi.isAdminPasswordValid(request.headers.get('x-silofire-admin-password') ?? undefined)) {
         return new Response('Unauthorized', { status: 401 });
+      }
+
+      if (runtimeApiMatch.kind === 'admin_site_announcement_snapshot') {
+        if (request.method === 'GET') {
+          try {
+            return Response.json(await runtimeApi.getAdminSiteAnnouncementSnapshot());
+          } catch (error) {
+            console.error(error);
+            return new Response('Runtime API failed', { status: 500 });
+          }
+        }
+
+        if (request.method === 'POST') {
+          try {
+            const result = await runtimeApi.createSiteAnnouncement(await readJsonBody(request));
+
+            if (result.kind === 'validation_error') {
+              return Response.json({ errors: result.errors }, { status: 400 });
+            }
+
+            void siteAnnouncementStream.broadcastCurrentSnapshot();
+            return Response.json(result.value);
+          } catch (error) {
+            console.error(error);
+            return new Response('Runtime API failed', { status: 500 });
+          }
+        }
+
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+
+      if (runtimeApiMatch.kind === 'admin_site_announcement_item') {
+        if (request.method === 'PUT') {
+          try {
+            const result = await runtimeApi.updateSiteAnnouncement(runtimeApiMatch.announcementId, await readJsonBody(request));
+
+            if (result.kind === 'not_found') {
+              return new Response('Announcement not found', { status: 404 });
+            }
+
+            if (result.kind === 'validation_error') {
+              return Response.json({ errors: result.errors }, { status: 400 });
+            }
+
+            void siteAnnouncementStream.broadcastCurrentSnapshot();
+            return Response.json(result.value);
+          } catch (error) {
+            console.error(error);
+            return new Response('Runtime API failed', { status: 500 });
+          }
+        }
+
+        if (request.method === 'DELETE') {
+          try {
+            const deleted = await runtimeApi.deleteSiteAnnouncement(runtimeApiMatch.announcementId);
+            if (deleted) {
+              void siteAnnouncementStream.broadcastCurrentSnapshot();
+            }
+            return deleted
+              ? Response.json({ ok: true })
+              : new Response('Announcement not found', { status: 404 });
+          } catch (error) {
+            console.error(error);
+            return new Response('Runtime API failed', { status: 500 });
+          }
+        }
+
+        return new Response('Method Not Allowed', { status: 405 });
       }
 
       if (runtimeApiMatch.kind === 'admin_heart_overview') {
@@ -588,4 +690,89 @@ function getRequiredControlKindValue(record: Record<string, unknown>, key: strin
   }
 
   throw new Error(`Missing required control kind: ${key}`);
+}
+
+function createSiteAnnouncementStreamController(
+  readSnapshot: () => Promise<SiteAnnouncementRecord extends never ? never : Awaited<ReturnType<typeof runtimeApi.getSiteAnnouncementSnapshot>>>,
+) {
+  const encoder = new TextEncoder();
+  const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  let nextBroadcastTimeout: number | undefined;
+
+  function clearScheduledBroadcast(): void {
+    if (nextBroadcastTimeout !== undefined) {
+      clearTimeout(nextBroadcastTimeout);
+      nextBroadcastTimeout = undefined;
+    }
+  }
+
+  function scheduleNextBroadcast(snapshot: { currentTimeMs?: number; nextChangeAtMs?: number }): void {
+    clearScheduledBroadcast();
+
+    if (clients.size === 0 || !Number.isFinite(snapshot.nextChangeAtMs) || !Number.isFinite(snapshot.currentTimeMs)) {
+      return;
+    }
+
+    const delayMs = Math.max(0, (snapshot.nextChangeAtMs as number) - (snapshot.currentTimeMs as number)) + 50;
+    nextBroadcastTimeout = setTimeout(() => {
+      void broadcastCurrentSnapshot();
+    }, delayMs);
+  }
+
+  async function broadcastCurrentSnapshot(): Promise<void> {
+    const snapshot = await readSnapshot();
+    const payload = encoder.encode(`data: ${JSON.stringify(snapshot)}\n\n`);
+
+    for (const client of [...clients]) {
+      try {
+        client.enqueue(payload);
+      } catch {
+        clients.delete(client);
+      }
+    }
+
+    scheduleNextBroadcast(snapshot);
+  }
+
+  return {
+    connect(request: Request): Response {
+      return new Response(new ReadableStream<Uint8Array>({
+        async start(controller) {
+          clients.add(controller);
+
+          try {
+            const snapshot = await readSnapshot();
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(snapshot)}\n\n`));
+            scheduleNextBroadcast(snapshot);
+          } catch (error) {
+            clients.delete(controller);
+            controller.error(error);
+            return;
+          }
+
+          request.signal.addEventListener('abort', () => {
+            clients.delete(controller);
+            if (clients.size === 0) {
+              clearScheduledBroadcast();
+            }
+
+            try {
+              controller.close();
+            } catch {
+              // Ignore close after stream shutdown.
+            }
+          });
+        },
+      }), {
+        headers: {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+        },
+      });
+    },
+    async broadcastCurrentSnapshot() {
+      await broadcastCurrentSnapshot();
+    },
+  };
 }

@@ -1,0 +1,14 @@
+{
+  "id": "persistent-sample",
+  "scope": "site",
+  "title": "Persistent Sample",
+  "body": "This sample stays up until you remove or disable it on the server side. It should stay pinned at the top.",
+  "mode": "persistent",
+  "priority": 100,
+  "startsAtMs": 1777166940000,
+  "endsAtMs": 1777253400000,
+  "colorTone": "critical",
+  "enabled": false,
+  "createdAtMs": 1777252124701,
+  "updatedAtMs": 1777253373282
+}

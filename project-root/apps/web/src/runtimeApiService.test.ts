@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 
-import { createRuntimeApiService, matchRuntimeApiRequest, type PersistedRuntimeSessionSnapshot } from '../../../packages/runtime-server/src';
+import {
+  createRuntimeApiService,
+  matchRuntimeApiRequest,
+  type PersistedRuntimeSessionSnapshot,
+  type SiteAnnouncementRecord,
+} from '../../../packages/runtime-server/src';
 
 const projectRoot = resolve(__dirname, '..', '..', '..');
 
@@ -70,6 +75,34 @@ class MemorySnapshotStore {
   }
 }
 
+class MemoryValueStore<TValue> {
+  constructor(private readonly values: Record<string, TValue> = {}) {}
+
+  async has(key: string): Promise<boolean> {
+    return Object.prototype.hasOwnProperty.call(this.values, key);
+  }
+
+  async get(key: string): Promise<TValue | undefined> {
+    return this.values[key];
+  }
+
+  async set(key: string, value: TValue): Promise<void> {
+    this.values[key] = value;
+  }
+
+  async delete(key: string): Promise<void> {
+    delete this.values[key];
+  }
+
+  async *list(prefix?: string): AsyncIterable<{ key: string; value: TValue }> {
+    for (const [key, value] of Object.entries(this.values)) {
+      if (!prefix || key === prefix || key.startsWith(`${prefix}/`)) {
+        yield { key, value };
+      }
+    }
+  }
+}
+
 function loadProjectFiles(projectId: string): Record<string, string> {
   const base = resolve(projectRoot, 'packages', 'content', projectId);
   const files: Record<string, string> = {};
@@ -100,6 +133,19 @@ function loadProjectFiles(projectId: string): Record<string, string> {
 test('runtime api request matcher resolves session routes', () => {
   assert.deepEqual(matchRuntimeApiRequest('/api/runtime-projects'), {
     kind: 'project_list',
+  });
+  assert.deepEqual(matchRuntimeApiRequest('/api/site-announcements/stream'), {
+    kind: 'site_announcement_stream',
+  });
+  assert.deepEqual(matchRuntimeApiRequest('/api/site-announcements'), {
+    kind: 'site_announcement_snapshot',
+  });
+  assert.deepEqual(matchRuntimeApiRequest('/api/runtime-admin/site-announcements'), {
+    kind: 'admin_site_announcement_snapshot',
+  });
+  assert.deepEqual(matchRuntimeApiRequest('/api/runtime-admin/site-announcements/example'), {
+    kind: 'admin_site_announcement_item',
+    announcementId: 'example',
   });
   assert.deepEqual(matchRuntimeApiRequest('/api/runtime-heart/demo04/title_screen'), {
     kind: 'heart_update',
@@ -137,6 +183,160 @@ test('runtime api request matcher resolves session routes', () => {
     kind: 'session_reset',
     sessionId: 'session_1',
   });
+});
+
+test('runtime api evaluates a site-owned active announcement stack in server order', async () => {
+  const siteAnnouncementStore = new MemoryValueStore<SiteAnnouncementRecord>({
+    'site/maintenance-banner': {
+      id: 'maintenance-banner',
+      scope: 'site',
+      title: 'Scheduled Maintenance',
+      body: 'Server work starts shortly.',
+      mode: 'persistent',
+      priority: 10,
+      startsAtMs: 500,
+      endsAtMs: 2_000,
+      colorTone: 'critical',
+      enabled: true,
+      createdAtMs: 100,
+      updatedAtMs: 100,
+    },
+    'site/active-note': {
+      id: 'active-note',
+      scope: 'site',
+      title: 'Patch Note',
+      body: 'The block has a small update.',
+      mode: 'dismissible',
+      priority: 10,
+      startsAtMs: 600,
+      endsAtMs: 1_900,
+      linkHref: '/admin',
+      linkLabel: 'Read More',
+      colorTone: 'info',
+      enabled: true,
+      createdAtMs: 100,
+      updatedAtMs: 100,
+    },
+    'site/upcoming-note': {
+      id: 'upcoming-note',
+      scope: 'site',
+      title: 'Soon',
+      body: 'This starts later.',
+      mode: 'blocking',
+      priority: 4,
+      startsAtMs: 1_500,
+      endsAtMs: 2_500,
+      enabled: true,
+      createdAtMs: 100,
+      updatedAtMs: 100,
+    },
+    'site/expired-note': {
+      id: 'expired-note',
+      scope: 'site',
+      title: 'Earlier',
+      body: 'This has already ended.',
+      mode: 'dismissible',
+      priority: 8,
+      startsAtMs: 100,
+      endsAtMs: 750,
+      enabled: true,
+      createdAtMs: 100,
+      updatedAtMs: 100,
+    },
+  });
+  const runtimeApi = createRuntimeApiService(new MemoryRuntimeStore(loadProjectFiles('demo04')), {
+    now: () => 1_000,
+    siteAnnouncementStore,
+  });
+
+  const snapshot = await runtimeApi.getSiteAnnouncementSnapshot();
+
+  assert.equal(snapshot.calendarScope, 'site');
+  assert.equal(snapshot.currentTimeMs, 1_000);
+  assert.equal(snapshot.nextChangeAtMs, 1_500);
+  assert.deepEqual(snapshot.activeAnnouncements.map((announcement) => announcement.id), [
+    'maintenance-banner',
+    'active-note',
+  ]);
+  assert.deepEqual(snapshot.upcomingAnnouncements.map((announcement) => announcement.id), ['upcoming-note']);
+  assert.deepEqual(snapshot.expiredAnnouncements.map((announcement) => announcement.id), ['expired-note']);
+});
+
+test('runtime api can create, validate, update, and delete site announcements for admin flows', async () => {
+  const runtimeApi = createRuntimeApiService(new MemoryRuntimeStore(loadProjectFiles('demo04')), {
+    now: () => 2_000,
+  });
+
+  const invalidCreate = await runtimeApi.createSiteAnnouncement({
+    title: '',
+    body: 'Invalid sample',
+    mode: 'dismissible',
+    priority: 5,
+    enabled: true,
+    linkHref: 'javascript:alert(1)',
+  });
+
+  assert.equal(invalidCreate.kind, 'validation_error');
+
+  const created = await runtimeApi.createSiteAnnouncement({
+    title: 'Admin Created',
+    body: 'Created from the admin route.',
+    mode: 'blocking',
+    priority: 25,
+    startsAtMs: 1_000,
+    endsAtMs: 5_000,
+    colorTone: 'warning',
+    enabled: true,
+  });
+
+  assert.equal(created.kind, 'ok');
+
+  const adminSnapshot = await runtimeApi.getAdminSiteAnnouncementSnapshot();
+  assert.equal(adminSnapshot.activeAnnouncements[0]?.title, 'Admin Created');
+  assert.equal(adminSnapshot.disabledAnnouncements.length, 0);
+  assert.equal(adminSnapshot.nextChangeAtMs, 5_000);
+
+  const updated = await runtimeApi.updateSiteAnnouncement(created.value.id, {
+    title: 'Admin Updated',
+    body: 'Updated from the admin route.',
+    mode: 'persistent',
+    priority: 40,
+    colorTone: 'critical',
+    enabled: true,
+  });
+
+  assert.equal(updated.kind, 'ok');
+  assert.equal(updated.value.title, 'Admin Updated');
+  assert.equal(updated.value.createdAtMs, created.value.createdAtMs);
+  assert.equal(updated.value.updatedAtMs, 2_000);
+
+  const disabled = await runtimeApi.updateSiteAnnouncement(created.value.id, {
+    title: 'Admin Disabled',
+    body: 'Disabled from the admin route.',
+    mode: 'persistent',
+    priority: 40,
+    colorTone: 'critical',
+    enabled: false,
+  });
+
+  assert.equal(disabled.kind, 'ok');
+
+  const disabledSnapshot = await runtimeApi.getAdminSiteAnnouncementSnapshot();
+  assert.equal(disabledSnapshot.disabledAnnouncements[0]?.title, 'Admin Disabled');
+  assert.equal(disabledSnapshot.allAnnouncements[0]?.title, 'Admin Disabled');
+  assert.equal(disabledSnapshot.nextChangeAtMs, undefined);
+
+  const deleted = await runtimeApi.deleteSiteAnnouncement(created.value.id);
+  assert.equal(deleted, true);
+
+  const missingUpdate = await runtimeApi.updateSiteAnnouncement('missing', {
+    title: 'Missing',
+    body: 'Missing',
+    mode: 'dismissible',
+    priority: 1,
+    enabled: true,
+  });
+  assert.equal(missingUpdate.kind, 'not_found');
 });
 
 test('runtime api heart analytics add, remove, rank, project detail, and reset work server-side', async () => {

@@ -10,6 +10,7 @@ const projectRoot = resolve(__dirname, '..', '..');
 const appNodeModules = resolve(__dirname, 'node_modules');
 const runtimeSnapshotRoot = resolve(projectRoot, '.silofire', 'runtime-snapshots');
 const runtimeHeartRoot = resolve(projectRoot, '.silofire', 'runtime-hearts');
+const runtimeSiteAnnouncementRoot = resolve(projectRoot, '.silofire', 'site-announcements');
 
 function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
   const runtimeApi = createRuntimeApiService({
@@ -33,17 +34,49 @@ function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
     adminPassword,
     heartStore: new NodeFileKeyValueStore(runtimeHeartRoot, createJsonValueCodec()),
     snapshotStore: new NodeFileKeyValueStore(runtimeSnapshotRoot, createJsonValueCodec()),
+    siteAnnouncementStore: new NodeFileKeyValueStore(runtimeSiteAnnouncementRoot, createJsonValueCodec()),
   });
+  const siteAnnouncementStream = createNodeSiteAnnouncementStreamController(runtimeApi);
 
   return {
     name: 'runtime-clock-api',
-    configureServer(server: { middlewares: { use: (handler: (req: { method?: string; url?: string }, res: { statusCode: number; setHeader(name: string, value: string): void; end(body: string): void }, next: () => void) => void) => void } }) {
+    configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const url = req.url ?? '';
         const match = matchRuntimeApiRequest(url);
 
         if (!match) {
           next();
+          return;
+        }
+
+        if (match.kind === 'site_announcement_stream') {
+          if (req.method !== 'GET') {
+            res.statusCode = 405;
+            res.end('Method Not Allowed');
+            return;
+          }
+
+          void siteAnnouncementStream.connect(req, res);
+          return;
+        }
+
+        if (match.kind === 'site_announcement_snapshot') {
+          if (req.method !== 'GET') {
+            res.statusCode = 405;
+            res.end('Method Not Allowed');
+            return;
+          }
+
+          void runtimeApi.getSiteAnnouncementSnapshot().then((snapshot) => {
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(snapshot));
+          }).catch((error) => {
+            console.error(error);
+            res.statusCode = 500;
+            res.end('Runtime session API failed');
+          });
           return;
         }
 
@@ -72,12 +105,111 @@ function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
           return;
         }
 
-        if (match.kind === 'admin_heart_overview' || match.kind === 'admin_heart_project' || match.kind === 'admin_heart_reset') {
+        if (
+          match.kind === 'admin_heart_overview'
+          || match.kind === 'admin_heart_project'
+          || match.kind === 'admin_heart_reset'
+          || match.kind === 'admin_site_announcement_snapshot'
+          || match.kind === 'admin_site_announcement_item'
+        ) {
           const adminPassword = getHeaderValue(req, 'x-silofire-admin-password');
 
           if (!runtimeApi.isAdminPasswordValid(adminPassword)) {
             res.statusCode = 401;
             res.end('Unauthorized');
+            return;
+          }
+
+          if (match.kind === 'admin_site_announcement_snapshot') {
+            if (req.method === 'GET') {
+              void runtimeApi.getAdminSiteAnnouncementSnapshot().then((snapshot) => {
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(snapshot));
+              }).catch((error) => {
+                console.error(error);
+                res.statusCode = 500;
+                res.end('Runtime session API failed');
+              });
+              return;
+            }
+
+            if (req.method === 'POST') {
+              void readJsonBody(req).then((body) => runtimeApi.createSiteAnnouncement(body)).then((result) => {
+                if (result.kind === 'validation_error') {
+                  res.statusCode = 400;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ errors: result.errors }));
+                  return;
+                }
+
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(result.value));
+                void siteAnnouncementStream.broadcastCurrentSnapshot();
+              }).catch((error) => {
+                console.error(error);
+                res.statusCode = 500;
+                res.end('Runtime session API failed');
+              });
+              return;
+            }
+
+            res.statusCode = 405;
+            res.end('Method Not Allowed');
+            return;
+          }
+
+          if (match.kind === 'admin_site_announcement_item') {
+            if (req.method === 'PUT') {
+              void readJsonBody(req).then((body) => runtimeApi.updateSiteAnnouncement(match.announcementId, body)).then((result) => {
+                if (result.kind === 'not_found') {
+                  res.statusCode = 404;
+                  res.end('Announcement not found');
+                  return;
+                }
+
+                if (result.kind === 'validation_error') {
+                  res.statusCode = 400;
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ errors: result.errors }));
+                  return;
+                }
+
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(result.value));
+                void siteAnnouncementStream.broadcastCurrentSnapshot();
+              }).catch((error) => {
+                console.error(error);
+                res.statusCode = 500;
+                res.end('Runtime session API failed');
+              });
+              return;
+            }
+
+            if (req.method === 'DELETE') {
+              void runtimeApi.deleteSiteAnnouncement(match.announcementId).then((deleted) => {
+                if (!deleted) {
+                  res.statusCode = 404;
+                  res.end('Announcement not found');
+                  return;
+                }
+
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ ok: true }));
+                void siteAnnouncementStream.broadcastCurrentSnapshot();
+              }).catch((error) => {
+                console.error(error);
+                res.statusCode = 500;
+                res.end('Runtime session API failed');
+              });
+              return;
+            }
+
+            res.statusCode = 405;
+            res.end('Method Not Allowed');
             return;
           }
 
@@ -481,6 +613,98 @@ function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
           res.end('Runtime API failed');
         });
       });
+    },
+  };
+}
+
+function createNodeSiteAnnouncementStreamController(
+  runtimeApi: Pick<ReturnType<typeof createRuntimeApiService>, 'getSiteAnnouncementSnapshot'>,
+) {
+  type SiteAnnouncementClient = {
+    write: (snapshot: unknown) => void;
+    close: () => void;
+  };
+
+  const clients = new Set<SiteAnnouncementClient>();
+  let nextBroadcastTimeout: NodeJS.Timeout | undefined;
+
+  function clearScheduledBroadcast(): void {
+    if (nextBroadcastTimeout) {
+      clearTimeout(nextBroadcastTimeout);
+      nextBroadcastTimeout = undefined;
+    }
+  }
+
+  function scheduleNextBroadcast(snapshot: { currentTimeMs?: number; nextChangeAtMs?: number }): void {
+    clearScheduledBroadcast();
+
+    if (clients.size === 0 || !Number.isFinite(snapshot.nextChangeAtMs) || !Number.isFinite(snapshot.currentTimeMs)) {
+      return;
+    }
+
+    const delayMs = Math.max(0, (snapshot.nextChangeAtMs as number) - (snapshot.currentTimeMs as number)) + 50;
+    nextBroadcastTimeout = setTimeout(() => {
+      void broadcastCurrentSnapshot();
+    }, delayMs);
+  }
+
+  async function broadcastCurrentSnapshot(): Promise<void> {
+    const snapshot = await runtimeApi.getSiteAnnouncementSnapshot();
+
+    for (const client of [...clients]) {
+      try {
+        client.write(snapshot);
+      } catch {
+        clients.delete(client);
+        client.close();
+      }
+    }
+
+    scheduleNextBroadcast(snapshot);
+  }
+
+  return {
+    async connect(req: { on?: (event: string, listener: () => void) => void }, res: {
+      statusCode: number;
+      setHeader(name: string, value: string): void;
+      end(body?: string): void;
+      write?: (chunk: string) => void;
+      flushHeaders?: () => void;
+    }) {
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+
+      if (typeof res.write !== 'function') {
+        res.end();
+        return;
+      }
+
+      const client: SiteAnnouncementClient = {
+        write(snapshot) {
+          res.write?.(`data: ${JSON.stringify(snapshot)}\n\n`);
+        },
+        close() {
+          res.end();
+        },
+      };
+
+      clients.add(client);
+      req.on?.('close', () => {
+        clients.delete(client);
+        if (clients.size === 0) {
+          clearScheduledBroadcast();
+        }
+      });
+
+      const snapshot = await runtimeApi.getSiteAnnouncementSnapshot();
+      client.write(snapshot);
+      scheduleNextBroadcast(snapshot);
+    },
+    async broadcastCurrentSnapshot() {
+      await broadcastCurrentSnapshot();
     },
   };
 }

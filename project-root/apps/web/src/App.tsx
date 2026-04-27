@@ -1,5 +1,5 @@
 import { createServerRuntimeClockSource, formatPreviewClockCountdown, formatRuntimeClockTimestamp } from './runtimeClock';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import type { ContentProjectRecord } from '../../../packages/content';
 import type { ProjectedAction, ProjectedControl, ProjectionResult } from '../../../packages/projection/src';
@@ -9,17 +9,34 @@ import { buildProjectRouteState, type ProjectRouteState } from './projectSession
 import { createServerRuntimeAmbientSource, type RuntimeAmbientNpcSnapshot } from './runtimeAmbient';
 import { applyRuntimeSessionAction, applyRuntimeSessionControl, createRuntimeSession, getRuntimeSession, resetRuntimeSession, type RuntimeSessionView } from './runtimeSessionApi';
 import { createServerRuntimeWeatherSource, type RuntimeWeatherProjectSnapshot } from './runtimeWeather';
-import { getRuntimeAdminHeartProject, listRuntimeAdminHeartOverview, resetRuntimeAdminHeartProject } from './runtimeAdminApi';
+import {
+  createRuntimeAdminSiteAnnouncement,
+  deleteRuntimeAdminSiteAnnouncement,
+  getRuntimeAdminHeartProject,
+  listRuntimeAdminHeartOverview,
+  listRuntimeAdminSiteAnnouncements,
+  resetRuntimeAdminHeartProject,
+  updateRuntimeAdminSiteAnnouncement,
+} from './runtimeAdminApi';
 import { setRuntimeHeart } from './runtimeHeartApi';
 import { listRuntimeProjects } from './runtimeProjectApi';
+import { createServerRuntimeSiteAnnouncementSource, getRuntimeSiteAnnouncementSnapshot } from './runtimeSiteAnnouncementsApi';
 import { AdminGateScreen, AdminOverviewScreen, AdminProjectScreen } from './components/AdminScreen';
 import { HomeScreen } from './components/HomeScreen';
 import { ProjectScreen, type ProjectNodeLink } from './components/ProjectScreen';
-import type { RuntimeAdminProjectHeartDetails, RuntimeAdminProjectHeartSummary } from '../../../packages/runtime-server/src';
+import { SiteAnnouncementStack } from './components/SiteAnnouncementStack';
+import type {
+  AdminSiteAnnouncementSnapshot,
+  RuntimeAdminProjectHeartDetails,
+  RuntimeAdminProjectHeartSummary,
+  SiteAnnouncementInput,
+  SiteAnnouncementSnapshot,
+} from '../../../packages/runtime-server/src';
 
 const SERVER_RUNTIME_CLOCK_SOURCE = createServerRuntimeClockSource();
 const SERVER_RUNTIME_AMBIENT_SOURCE = createServerRuntimeAmbientSource();
 const SERVER_RUNTIME_WEATHER_SOURCE = createServerRuntimeWeatherSource();
+const SERVER_RUNTIME_SITE_ANNOUNCEMENT_SOURCE = createServerRuntimeSiteAnnouncementSource();
 const ADMIN_PASSWORD_STORAGE_KEY = 'silofire.admin.password';
 const IS_LOCAL_DEV = typeof window !== 'undefined'
   && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
@@ -49,8 +66,10 @@ export function App() {
   const [adminGateErrorText, setAdminGateErrorText] = useState<string | undefined>();
   const [adminOverview, setAdminOverview] = useState<RuntimeAdminProjectHeartSummary[]>([]);
   const [adminProjectDetailsById, setAdminProjectDetailsById] = useState<Record<string, RuntimeAdminProjectHeartDetails>>({});
+  const [adminSiteAnnouncementSnapshot, setAdminSiteAnnouncementSnapshot] = useState<AdminSiteAnnouncementSnapshot>();
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminRevision, setAdminRevision] = useState(0);
+  const [siteAnnouncementSnapshot, setSiteAnnouncementSnapshot] = useState<SiteAnnouncementSnapshot>();
 
   function beginProjectMutation(projectId: string): number {
     const nextVersion = (projectMutationVersionRef.current[projectId] ?? 0) + 1;
@@ -98,6 +117,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    return SERVER_RUNTIME_SITE_ANNOUNCEMENT_SOURCE.subscribe({
+      onUpdate(snapshot) {
+        setSiteAnnouncementSnapshot(snapshot);
+      },
+      onError(error) {
+        console.error(error);
+      },
+    });
+  }, []);
+
+  useEffect(() => {
     if (!isAdminRoute(route) || !adminPassword) {
       return;
     }
@@ -109,12 +139,15 @@ export function App() {
 
     setAdminLoading(!hasCachedAdminData);
 
-    void listRuntimeAdminHeartOverview(adminPassword).then(async (overviewResult) => {
+    void Promise.all([
+      listRuntimeAdminHeartOverview(adminPassword),
+      listRuntimeAdminSiteAnnouncements(adminPassword),
+    ]).then(async ([overviewResult, siteAnnouncementResult]) => {
       if (canceled) {
         return;
       }
 
-      if (overviewResult.kind === 'unauthorized') {
+      if (overviewResult.kind === 'unauthorized' || siteAnnouncementResult.kind === 'unauthorized') {
         clearStoredAdminPassword();
         setAdminPassword(undefined);
         setAdminGateErrorText('Password rejected by server.');
@@ -122,13 +155,14 @@ export function App() {
         return;
       }
 
-      if (overviewResult.kind !== 'ok') {
+      if (overviewResult.kind !== 'ok' || siteAnnouncementResult.kind !== 'ok') {
         setAdminGateErrorText('Unable to load admin analytics.');
         setAdminLoading(false);
         return;
       }
 
       setAdminOverview(overviewResult.value);
+      setAdminSiteAnnouncementSnapshot(siteAnnouncementResult.value);
 
       if (route.kind !== 'admin_project') {
         setAdminLoading(false);
@@ -468,13 +502,17 @@ export function App() {
     }
 
     setAdminLoading(true);
-    const overviewResult = await listRuntimeAdminHeartOverview(trimmedPassword);
+    const [overviewResult, siteAnnouncementResult] = await Promise.all([
+      listRuntimeAdminHeartOverview(trimmedPassword),
+      listRuntimeAdminSiteAnnouncements(trimmedPassword),
+    ]);
 
-    if (overviewResult.kind === 'ok') {
+    if (overviewResult.kind === 'ok' && siteAnnouncementResult.kind === 'ok') {
       setAdminPassword(trimmedPassword);
       writeStoredAdminPassword(trimmedPassword);
       setAdminGateErrorText(undefined);
       setAdminOverview(overviewResult.value);
+      setAdminSiteAnnouncementSnapshot(siteAnnouncementResult.value);
       setAdminRevision((current) => current + 1);
       setAdminLoading(false);
       return;
@@ -490,6 +528,7 @@ export function App() {
     setAdminGateErrorText(undefined);
     setAdminOverview([]);
     setAdminProjectDetailsById({});
+    setAdminSiteAnnouncementSnapshot(undefined);
     applyAppRoute({ kind: 'admin_overview' }, 'replace');
   }
 
@@ -511,25 +550,138 @@ export function App() {
     }
   }
 
+  async function refreshSiteAnnouncementState(nextAdminPassword: string | undefined = adminPassword): Promise<SiteAnnouncementSnapshot | undefined> {
+    try {
+      const [publicSnapshot, adminSnapshotResult] = await Promise.all([
+        getRuntimeSiteAnnouncementSnapshot(),
+        nextAdminPassword ? listRuntimeAdminSiteAnnouncements(nextAdminPassword) : Promise.resolve(undefined),
+      ]);
+
+      if (publicSnapshot) {
+        setSiteAnnouncementSnapshot(publicSnapshot);
+      }
+
+      if (adminSnapshotResult?.kind === 'ok') {
+        setAdminSiteAnnouncementSnapshot(adminSnapshotResult.value);
+      }
+
+      return publicSnapshot;
+    } catch (error) {
+      console.error(error);
+      return undefined;
+    }
+  }
+
+  async function handleCreateSiteAnnouncement(input: SiteAnnouncementInput): Promise<string[] | undefined> {
+    if (!adminPassword) {
+      return ['Admin password missing.'];
+    }
+
+    const result = await createRuntimeAdminSiteAnnouncement(adminPassword, input);
+
+    if (result.kind === 'unauthorized') {
+      signOutAdmin();
+      setAdminGateErrorText('Password rejected by server.');
+      return ['Password rejected by server.'];
+    }
+
+    if (result.kind === 'validation_error') {
+      return result.errors;
+    }
+
+    if (result.kind !== 'ok') {
+      return ['Unable to create announcement.'];
+    }
+
+    await refreshSiteAnnouncementState(adminPassword);
+    setAdminRevision((current) => current + 1);
+    return undefined;
+  }
+
+  async function handleUpdateSiteAnnouncement(announcementId: string, input: SiteAnnouncementInput): Promise<string[] | undefined> {
+    if (!adminPassword) {
+      return ['Admin password missing.'];
+    }
+
+    const result = await updateRuntimeAdminSiteAnnouncement(announcementId, adminPassword, input);
+
+    if (result.kind === 'unauthorized') {
+      signOutAdmin();
+      setAdminGateErrorText('Password rejected by server.');
+      return ['Password rejected by server.'];
+    }
+
+    if (result.kind === 'validation_error') {
+      return result.errors;
+    }
+
+    if (result.kind === 'not_found') {
+      return ['Announcement no longer exists.'];
+    }
+
+    if (result.kind !== 'ok') {
+      return ['Unable to update announcement.'];
+    }
+
+    await refreshSiteAnnouncementState(adminPassword);
+    setAdminRevision((current) => current + 1);
+    return undefined;
+  }
+
+  async function handleDeleteSiteAnnouncement(announcementId: string): Promise<string[] | undefined> {
+    if (!adminPassword) {
+      return ['Admin password missing.'];
+    }
+
+    const result = await deleteRuntimeAdminSiteAnnouncement(announcementId, adminPassword);
+
+    if (result.kind === 'unauthorized') {
+      signOutAdmin();
+      setAdminGateErrorText('Password rejected by server.');
+      return ['Password rejected by server.'];
+    }
+
+    if (result.kind === 'not_found') {
+      return ['Announcement no longer exists.'];
+    }
+
+    if (result.kind !== 'ok') {
+      return ['Unable to delete announcement.'];
+    }
+
+    await refreshSiteAnnouncementState(adminPassword);
+    setAdminRevision((current) => current + 1);
+    return undefined;
+  }
+
   async function handlePublicHeart(projectId: string, nodeId: string, nextActive: boolean): Promise<boolean> {
     return Boolean(await setRuntimeHeart(projectId, nodeId, nextActive));
   }
 
+  function renderScreen(content: ReactNode, includeTopAnnouncements = true) {
+    return (
+      <>
+        {includeTopAnnouncements ? <SiteAnnouncementStack announcements={siteAnnouncementSnapshot?.activeAnnouncements ?? []} /> : null}
+        {content}
+      </>
+    );
+  }
+
   if (isAdminRoute(route)) {
     if (!adminPassword) {
-      return (
+      return renderScreen(
         <AdminGateScreen
           errorText={adminGateErrorText}
           onBackHome={() => applyAppRoute({ kind: 'home' })}
           onUnlock={(password) => {
             void authenticateAdmin(password);
           }}
-        />
+        />,
       );
     }
 
     if (route.kind === 'admin_project') {
-      return (
+      return renderScreen(
         <AdminProjectScreen
           isLoading={adminLoading}
           project={adminProjectDetailsById[route.projectId]}
@@ -541,47 +693,52 @@ export function App() {
             void handleAdminHeartReset(route.projectId);
           }}
           onSignOut={signOutAdmin}
-        />
+        />,
       );
     }
 
-    return (
+    return renderScreen(
       <AdminOverviewScreen
         isLoading={adminLoading}
         projects={adminOverview}
+        siteAnnouncements={adminSiteAnnouncementSnapshot}
         onBackHome={() => applyAppRoute({ kind: 'home' })}
         onOpenProject={(projectId) => applyAppRoute({ kind: 'admin_project', projectId })}
         onSignOut={signOutAdmin}
-      />
+        onCreateSiteAnnouncement={handleCreateSiteAnnouncement}
+        onUpdateSiteAnnouncement={handleUpdateSiteAnnouncement}
+        onDeleteSiteAnnouncement={handleDeleteSiteAnnouncement}
+      />,
     );
   }
 
   if (route.kind === 'home') {
-    return (
+    return renderScreen(
       <HomeScreen
         onEnterAdmin={() => applyAppRoute({ kind: 'admin_overview' })}
         projects={projects}
         onEnterProject={(nextProjectId) => {
           void openProjectSession(nextProjectId);
         }}
-      />
+      />,
     );
   }
 
   if (!project || !projectId) {
-    return (
+    return renderScreen(
       <HomeScreen
         onEnterAdmin={() => applyAppRoute({ kind: 'admin_overview' })}
         projects={projects}
         onEnterProject={(nextProjectId) => void openProjectSession(nextProjectId)}
-      />
+      />,
     );
   }
 
-  return (
+  return renderScreen(
     <ProjectScreen
       project={project}
       nodes={nodes}
+      siteAnnouncements={siteAnnouncementSnapshot?.activeAnnouncements ?? []}
       showNodeList={SHOW_PUBLIC_PROJECT_NODE_LIST}
       showStatePanes={SHOW_PUBLIC_PROJECT_STATE_PANES}
       selectedNodeId={currentNodeId}
@@ -636,7 +793,8 @@ export function App() {
       onControl={(control) => {
         void handleControl(control);
       }}
-    />
+    />,
+    false,
   );
 }
 

@@ -16,7 +16,7 @@ This is not a browser-first architecture where the client owns game truth.
 
 ## Current Architectural Direction
 
-- The client is a React and HTML presentation shell.
+- The client is a React and HTML presentation shell. Do not store stuff in the client, we have a server for that.
 - The server is the authoritative source for stateful behavior.
 - Multiplayer correctness matters more than preserving older browser-only patterns.
 - Separation of concerns matters more than short-term convenience.

@@ -22,6 +22,18 @@ import type { RuntimeClockSnapshot, RuntimeClockSource } from '../../runtime/src
 import type { RuntimeSessionState } from '../../runtime/src';
 import type { KeyValueStore } from '../../storage/src';
 import {
+  buildAdminSiteAnnouncementSnapshot,
+  buildSiteAnnouncementSnapshot,
+  createSiteAnnouncementRecord,
+  getSiteAnnouncementRecord,
+  siteAnnouncementKey,
+  validateSiteAnnouncementInput,
+  type AdminSiteAnnouncementSnapshot,
+  type SiteAnnouncementMutationResult,
+  type SiteAnnouncementRecord,
+  type SiteAnnouncementSnapshot,
+} from './siteAnnouncements';
+import {
   createRuntimeSessionServiceForContentFiles,
   normalizeSessionStateForPersistedContinue,
   type CreateRuntimeSessionOptions,
@@ -33,6 +45,8 @@ import {
 import type { ProjectedAction, ProjectedControl } from '../../projection/src';
 
 export * from './runtimeSessionService';
+export * from './schedulerCore';
+export * from './siteAnnouncements';
 
 const DEFAULT_CONTENT_ROOT = 'packages/content';
 const TITLE_SCREEN_NEW_GAME_ACTION_ID = 'title_screen_new_game';
@@ -50,6 +64,10 @@ export interface RuntimeContentStore {
 
 export type RuntimeApiRouteMatch =
   | { kind: 'project_list' }
+  | { kind: 'site_announcement_stream' }
+  | { kind: 'site_announcement_snapshot' }
+  | { kind: 'admin_site_announcement_snapshot' }
+  | { kind: 'admin_site_announcement_item'; announcementId: string }
   | { kind: 'heart_update'; projectId: string; nodeId: string }
   | { kind: 'admin_heart_overview' }
   | { kind: 'admin_heart_project'; projectId: string }
@@ -67,6 +85,11 @@ export type RuntimeApiRouteMatch =
 
 export interface RuntimeApiService {
   listProjects(): Promise<ContentProjectRecord[]>;
+  getSiteAnnouncementSnapshot(): Promise<SiteAnnouncementSnapshot>;
+  getAdminSiteAnnouncementSnapshot(): Promise<AdminSiteAnnouncementSnapshot>;
+  createSiteAnnouncement(input: unknown): Promise<SiteAnnouncementMutationResult>;
+  updateSiteAnnouncement(announcementId: string, input: unknown): Promise<SiteAnnouncementMutationResult>;
+  deleteSiteAnnouncement(announcementId: string): Promise<boolean>;
   isAdminPasswordValid(password: string | undefined): boolean;
   setHeart(projectId: string, nodeId: string, hearted: boolean): Promise<RuntimeHeartCount | undefined>;
   listHeartAdminOverview(): Promise<RuntimeAdminProjectHeartSummary[]>;
@@ -134,6 +157,33 @@ export function matchRuntimeApiRequest(url: string): RuntimeApiRouteMatch | unde
   if (/^\/api\/runtime-projects(?:\?.*)?$/.test(url)) {
     return {
       kind: 'project_list',
+    };
+  }
+
+  if (/^\/api\/site-announcements\/stream(?:\?.*)?$/.test(url)) {
+    return {
+      kind: 'site_announcement_stream',
+    };
+  }
+
+  if (/^\/api\/site-announcements(?:\?.*)?$/.test(url)) {
+    return {
+      kind: 'site_announcement_snapshot',
+    };
+  }
+
+  const adminSiteAnnouncementItemMatch = /^\/api\/runtime-admin\/site-announcements\/([^/?#]+)(?:\?.*)?$/.exec(url);
+
+  if (adminSiteAnnouncementItemMatch) {
+    return {
+      kind: 'admin_site_announcement_item',
+      announcementId: decodeURIComponent(adminSiteAnnouncementItemMatch[1]),
+    };
+  }
+
+  if (/^\/api\/runtime-admin\/site-announcements(?:\?.*)?$/.test(url)) {
+    return {
+      kind: 'admin_site_announcement_snapshot',
     };
   }
 
@@ -277,6 +327,7 @@ export function createRuntimeApiService(
     now?: () => number;
     snapshotStore?: KeyValueStore<PersistedRuntimeSessionSnapshot>;
     heartStore?: KeyValueStore<number>;
+    siteAnnouncementStore?: KeyValueStore<SiteAnnouncementRecord>;
     adminPassword?: string;
     clockSeedMs?: number;
   } = {},
@@ -285,6 +336,7 @@ export function createRuntimeApiService(
   const now = options.now ?? (() => Date.now());
   const snapshotStore = options.snapshotStore ?? createMemorySnapshotStore();
   const heartStore = options.heartStore ?? createMemoryValueStore<number>();
+  const siteAnnouncementStore = options.siteAnnouncementStore ?? createMemoryValueStore<SiteAnnouncementRecord>();
   const adminPassword = options.adminPassword;
   const clockSeedMs = options.clockSeedMs ?? 0;
   const clockAnchorMsByProjectId = new Map<string, number>();
@@ -314,6 +366,67 @@ export function createRuntimeApiService(
       }));
 
       return projects.filter((project): project is ContentProjectRecord => Boolean(project));
+    },
+    async getSiteAnnouncementSnapshot() {
+      return buildSiteAnnouncementSnapshot(siteAnnouncementStore, now());
+    },
+    async getAdminSiteAnnouncementSnapshot() {
+      return buildAdminSiteAnnouncementSnapshot(siteAnnouncementStore, now());
+    },
+    async createSiteAnnouncement(input) {
+      const validated = validateSiteAnnouncementInput(input);
+
+      if (!validated.ok) {
+        return {
+          kind: 'validation_error',
+          errors: validated.errors,
+        };
+      }
+
+      const id = createSiteAnnouncementId(now());
+      const record = createSiteAnnouncementRecord(id, validated.value, now());
+      await siteAnnouncementStore.set(siteAnnouncementKey(id), record);
+
+      return {
+        kind: 'ok',
+        value: record,
+      };
+    },
+    async updateSiteAnnouncement(announcementId, input) {
+      const existing = await getSiteAnnouncementRecord(siteAnnouncementStore, announcementId);
+
+      if (!existing) {
+        return {
+          kind: 'not_found',
+        };
+      }
+
+      const validated = validateSiteAnnouncementInput(input);
+
+      if (!validated.ok) {
+        return {
+          kind: 'validation_error',
+          errors: validated.errors,
+        };
+      }
+
+      const record = createSiteAnnouncementRecord(announcementId, validated.value, now(), existing.createdAtMs);
+      await siteAnnouncementStore.set(siteAnnouncementKey(announcementId), record);
+
+      return {
+        kind: 'ok',
+        value: record,
+      };
+    },
+    async deleteSiteAnnouncement(announcementId) {
+      const existing = await getSiteAnnouncementRecord(siteAnnouncementStore, announcementId);
+
+      if (!existing) {
+        return false;
+      }
+
+      await siteAnnouncementStore.delete(siteAnnouncementKey(announcementId));
+      return true;
     },
     isAdminPasswordValid(password) {
       return typeof adminPassword === 'string' && adminPassword.length > 0 && password === adminPassword;
@@ -1040,6 +1153,10 @@ function projectNodeHeartKey(projectId: string, nodeId: string): string {
 
 function projectSnapshotKey(projectId: string): string {
   return `projects/${projectId}/snapshot`;
+}
+
+function createSiteAnnouncementId(nowMs: number): string {
+  return `site_${nowMs}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function shouldPersistSessionSnapshot(

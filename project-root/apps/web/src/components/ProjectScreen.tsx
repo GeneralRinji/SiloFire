@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { ContentProjectRecord } from '../../../../packages/content';
 import type { ProjectedAction, ProjectedControl, ProjectionResult } from '../../../../packages/projection/src';
+import type { SiteAnnouncementRecord } from '../../../../packages/runtime-server/src';
 import { ProjectedPageView } from '../../../../packages/renderer-react/src/components/ProjectedPageView';
 import { PublicHeartPane } from './PublicHeartPane';
 import { ProjectStatePanes } from './ProjectStatePanes';
+import { SiteAnnouncementStack } from './SiteAnnouncementStack';
 
 const HEART_UI_STORAGE_KEY = 'silofire.publicHearts';
 
@@ -17,6 +19,7 @@ interface ProjectScreenProps {
   nodes: ProjectNodeLink[];
   showNodeList?: boolean;
   showStatePanes?: boolean;
+  siteAnnouncements?: SiteAnnouncementRecord[];
   selectedNodeId?: string;
   selectedPage?: ProjectionResult;
   selectedPageRenderKey?: string;
@@ -63,6 +66,7 @@ export function ProjectScreen({
   nodes,
   showNodeList = true,
   showStatePanes = false,
+  siteAnnouncements = [],
   selectedNodeId,
   selectedPage,
   selectedPageRenderKey,
@@ -132,6 +136,10 @@ export function ProjectScreen({
             ) : null}
           </div>
         </section>
+
+        {siteAnnouncements.length > 0 ? (
+          <SiteAnnouncementStack announcements={siteAnnouncements} variant="sidebar" />
+        ) : null}
 
         {showNodeList ? (
           <section className="terminal-block">

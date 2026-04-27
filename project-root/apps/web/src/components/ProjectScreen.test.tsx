@@ -19,6 +19,20 @@ test('ProjectScreen renders a selected projected page without invalid component 
         features: [],
       }}
       nodes={[{ id: 'start', label: 'Start' }]}
+      siteAnnouncements={[
+        {
+          id: 'maintenance',
+          scope: 'site',
+          title: 'Maintenance',
+          body: 'Server work in five minutes.',
+          mode: 'persistent',
+          priority: 100,
+          colorTone: 'critical',
+          enabled: true,
+          createdAtMs: 10,
+          updatedAtMs: 10,
+        },
+      ]}
       selectedNodeId="start"
       selectedPage={{
         kind: 'page',
@@ -65,7 +79,9 @@ test('ProjectScreen renders a selected projected page without invalid component 
   assert.match(html, /Look around/);
   assert.match(html, /terminal-heart-pane__glyph" aria-hidden="true">♡</);
   assert.match(html, /Show this node some love \(analytics only\)/);
+  assert.match(html, /Server work in five minutes\./);
   assert.ok(html.indexOf('Look around') < html.indexOf('Show this node some love (analytics only)'));
+  assert.ok(html.indexOf('Maintenance') < html.indexOf('Visible entry text.'));
   assert.match(html, /aria-pressed="false"/);
 });
 

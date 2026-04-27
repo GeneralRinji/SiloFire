@@ -1,0 +1,13 @@
+{
+  "id": "site_1777253296654_9g76n4",
+  "scope": "site",
+  "title": "test01 persistent",
+  "body": "test01 persistent  asdf",
+  "mode": "persistent",
+  "priority": 100,
+  "startsAtMs": 1777166820000,
+  "endsAtMs": 1777253520000,
+  "enabled": false,
+  "createdAtMs": 1777253296654,
+  "updatedAtMs": 1777253546017
+}
