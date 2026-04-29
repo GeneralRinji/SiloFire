@@ -1,0 +1,73 @@
+{
+  "projectId": "PrototypeHub",
+  "route": {
+    "nodeId": "lobby_area",
+    "runNonce": 0
+  },
+  "areaVisitCounts": {
+    "lobby_area": 1
+  },
+  "pathVisitCounts": {},
+  "recentLogByNodeId": {},
+  "actionAttemptsByNodeId": {},
+  "sessionState": {
+    "objects": {
+      "prototypehub_lobby_door": {
+        "open": true
+      },
+      "prototypehub_lobby_jukebox": {
+        "focused": true,
+        "browseIndex": 8,
+        "fakeCredits": 0,
+        "currentTrack": "none",
+        "currentTrackLabel": "",
+        "currentTrackMode": "",
+        "currentTrackStartedAtMs": 0,
+        "currentTrackEndsAtMs": 0,
+        "queueTrackIds": []
+      }
+    },
+    "world": {
+      "time": {
+        "phase": "dawn",
+        "cycle": [
+          "day",
+          "dusk",
+          "night",
+          "dawn"
+        ],
+        "nowMs": 1777423634985,
+        "source": "preview-local"
+      }
+    },
+    "player": {
+      "location": "lobby_area",
+      "active": {
+        "location": "lobby_area"
+      }
+    },
+    "npcs": {}
+  },
+  "savedAt": 1777423634988
+}      "time": {
+        "phase": "dawn",
+        "cycle": [
+          "day",
+          "dusk",
+          "night",
+          "dawn"
+        ],
+        "nowMs": 1777423634970,
+        "source": "preview-local"
+      }
+    },
+    "player": {
+      "location": "lobby_area",
+      "active": {
+        "location": "lobby_area"
+      }
+    },
+    "npcs": {}
+  },
+  "savedAt": 1777423634971
+}

@@ -1,0 +1,23 @@
+{
+  "projectId": "demo03",
+  "route": {
+    "nodeId": "town_square",
+    "runNonce": 0
+  },
+  "areaVisitCounts": {
+    "town_square": 1
+  },
+  "pathVisitCounts": {},
+  "recentLogByNodeId": {},
+  "actionAttemptsByNodeId": {},
+  "sessionState": {
+    "player": {
+      "location": "town_square",
+      "active": {
+        "location": "town_square"
+      }
+    },
+    "npcs": {}
+  },
+  "savedAt": 1777252655892
+}
