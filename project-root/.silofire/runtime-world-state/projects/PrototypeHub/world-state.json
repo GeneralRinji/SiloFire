@@ -1,0 +1,44 @@
+{
+  "projectId": "PrototypeHub",
+  "sessionState": {
+    "objects": {
+      "prototypehub_lobby_door": {
+        "open": false,
+        "openedAtMs": 0
+      },
+      "prototypehub_lobby_jukebox": {
+        "browseIndex": 11,
+        "fakeCredits": 0,
+        "currentTrack": "none",
+        "currentTrackLabel": "",
+        "currentTrackMode": "",
+        "currentTrackStartedAtMs": 0,
+        "currentTrackEndsAtMs": 0,
+        "lobbyAtmosphereTrackId": "",
+        "lobbyAtmosphereTick": 0,
+        "queueTrackIds": []
+      }
+    },
+    "world": {
+      "time": {
+        "phase": "night",
+        "cycle": [
+          "day",
+          "dusk",
+          "night",
+          "dawn"
+        ],
+        "nowMs": 1777433431820,
+        "source": "preview-local"
+      }
+    },
+    "player": {
+      "location": "lobby_area",
+      "active": {
+        "location": "lobby_area"
+      }
+    },
+    "npcs": {}
+  },
+  "savedAt": 1777433431823
+}

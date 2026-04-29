@@ -674,10 +674,11 @@ interface AdminProjectScreenProps {
   onBackOverview: () => void;
   onOpenNode: (nodeId: string) => void;
   onResetHearts: () => void;
+  onResetJukebox: () => void;
   onSignOut: () => void;
 }
 
-export function AdminProjectScreen({ isLoading, project, onBackOverview, onOpenNode, onResetHearts, onSignOut }: AdminProjectScreenProps) {
+export function AdminProjectScreen({ isLoading, project, onBackOverview, onOpenNode, onResetHearts, onResetJukebox, onSignOut }: AdminProjectScreenProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>(project?.activeClock?.nodeId ?? project?.nodes[0]?.nodeId ?? project?.nodeList[0]?.nodeId);
 
   const selectedNode = project?.nodeList.find((node) => node.nodeId === selectedNodeId)
@@ -703,6 +704,7 @@ export function AdminProjectScreen({ isLoading, project, onBackOverview, onOpenN
             <button type="button" className="terminal-link terminal-link--muted" onClick={onBackOverview}>back/overview</button>
             <button type="button" className="terminal-link terminal-link--muted" onClick={onSignOut}>sign/out</button>
             <button type="button" className="terminal-link terminal-link--muted" onClick={onResetHearts}>reset/hearts</button>
+            <button type="button" className="terminal-link terminal-link--muted" onClick={onResetJukebox}>reset/jukebox</button>
           </div>
           {project ? <p className="terminal-copy terminal-copy--strong">total-hearts/{project.totalHearts}</p> : null}
         </section>

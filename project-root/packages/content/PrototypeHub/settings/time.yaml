@@ -1,0 +1,50 @@
+calendars:
+  prototypehub_street:
+    phases:
+      - id: day
+        durationMinutes: 4
+        statusText:
+          - Daylight makes the narrow frontage look more experimental than commercial.
+      - id: dusk
+        durationMinutes: 2
+        statusText:
+          - The neon wins its argument with the fading light and turns the window into a soft electrical bruise.
+      - id: night
+        durationMinutes: 4
+        statusText:
+          - Night presses the chatter behind the glass a little closer to the street.
+      - id: dawn
+        durationMinutes: 2
+        statusText:
+          - Dawn leaves the sign buzzing to an audience of almost nobody.
+
+  # prototypehub_lobby:
+    # phases:
+      # - id: day
+        # durationMinutes: 4
+        # statusText:
+          # - Daylight reaches the lobby in a flat silver wash that makes the chrome look cleaner than it is.
+      # - id: dusk
+        # durationMinutes: 2
+        # statusText:
+          # - Dusk turns the room reflective and makes the jukebox cabinet feel more deliberate.
+      # - id: night
+        # durationMinutes: 4
+        # statusText:
+        #  - Night leaves the lobby humming with soft machine light and the memory of voices near the door.
+      # - id: dawn
+        # durationMinutes: 2
+        # statusText:
+          # - Dawn makes the lobby look like it stayed awake on purpose.
+
+assignments:
+  defaultCalendar: prototypehub_street
+  folders:
+   # outside: prototypehub_street
+   # lobby: prototypehub_lobby
+
+visibility:
+  defaultRecentLog: false
+  folders:
+    outside: true
+    lobby: true

@@ -8,7 +8,8 @@ import { createJsonValueCodec } from '../../packages/storage/src';
 
 const projectRoot = resolve(__dirname, '..', '..');
 const appNodeModules = resolve(__dirname, 'node_modules');
-const runtimeSnapshotRoot = resolve(projectRoot, '.silofire', 'runtime-snapshots');
+const runtimeContinueStateRoot = resolve(projectRoot, '.silofire', 'runtime-continue-state');
+const runtimeWorldStateRoot = resolve(projectRoot, '.silofire', 'runtime-world-state');
 const runtimeHeartRoot = resolve(projectRoot, '.silofire', 'runtime-hearts');
 const runtimeSiteAnnouncementRoot = resolve(projectRoot, '.silofire', 'site-announcements');
 
@@ -33,9 +34,11 @@ function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
   }, {
     adminPassword,
     heartStore: new NodeFileKeyValueStore(runtimeHeartRoot, createJsonValueCodec()),
-    snapshotStore: new NodeFileKeyValueStore(runtimeSnapshotRoot, createJsonValueCodec()),
+    continueStore: new NodeFileKeyValueStore(runtimeContinueStateRoot, createJsonValueCodec()),
+    worldStateStore: new NodeFileKeyValueStore(runtimeWorldStateRoot, createJsonValueCodec()),
     siteAnnouncementStore: new NodeFileKeyValueStore(runtimeSiteAnnouncementRoot, createJsonValueCodec()),
   });
+  const runtimeSessionStream = createNodeRuntimeSessionStreamController(runtimeApi);
   const siteAnnouncementStream = createNodeSiteAnnouncementStreamController(runtimeApi);
 
   return {
@@ -58,6 +61,17 @@ function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
           }
 
           void siteAnnouncementStream.connect(req, res);
+          return;
+        }
+
+        if (match.kind === 'session_stream') {
+          if (req.method !== 'GET') {
+            res.statusCode = 405;
+            res.end('Method Not Allowed');
+            return;
+          }
+
+          void runtimeSessionStream.connect(match.sessionId, req, res);
           return;
         }
 
@@ -109,6 +123,7 @@ function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
           match.kind === 'admin_heart_overview'
           || match.kind === 'admin_heart_project'
           || match.kind === 'admin_heart_reset'
+          || match.kind === 'admin_jukebox_reset'
           || match.kind === 'admin_site_announcement_snapshot'
           || match.kind === 'admin_site_announcement_item'
         ) {
@@ -249,6 +264,26 @@ function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
               res.statusCode = 200;
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify(details));
+            }).catch((error) => {
+              console.error(error);
+              res.statusCode = 500;
+              res.end('Runtime session API failed');
+            });
+            return;
+          }
+
+          if (match.kind === 'admin_jukebox_reset') {
+            if (req.method !== 'POST') {
+              res.statusCode = 405;
+              res.end('Method Not Allowed');
+              return;
+            }
+
+            void runtimeApi.resetProjectJukeboxes(match.projectId).then(async (sessionIds) => {
+              await Promise.all(sessionIds.map((sessionId) => runtimeSessionStream.broadcastSession(sessionId)));
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ ok: true }));
             }).catch((error) => {
               console.error(error);
               res.statusCode = 500;
@@ -406,6 +441,7 @@ function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
             res.statusCode = 200;
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify(sessionView));
+            void runtimeSessionStream.broadcastSession(match.sessionId);
           }).catch((error) => {
             console.error(error);
             res.statusCode = 500;
@@ -437,6 +473,7 @@ function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
             res.statusCode = 200;
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify(sessionView));
+            void runtimeSessionStream.broadcastSession(match.sessionId);
           }).catch((error) => {
             console.error(error);
             res.statusCode = 500;
@@ -462,6 +499,7 @@ function createRuntimeClockApiPlugin(adminPassword: string | undefined) {
             res.statusCode = 200;
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify(sessionView));
+            void runtimeSessionStream.broadcastSession(match.sessionId);
           }).catch((error) => {
             console.error(error);
             res.statusCode = 500;
@@ -707,6 +745,175 @@ function createNodeSiteAnnouncementStreamController(
       await broadcastCurrentSnapshot();
     },
   };
+}
+
+function createNodeRuntimeSessionStreamController(
+  runtimeApi: Pick<ReturnType<typeof createRuntimeApiService>, 'getSession'>,
+) {
+  type RuntimeSessionClient = {
+    write: (sessionView: unknown) => void;
+    close: () => void;
+  };
+
+  const clientsBySessionId = new Map<string, Set<RuntimeSessionClient>>();
+  const nextBroadcastTimeoutBySessionId = new Map<string, NodeJS.Timeout>();
+
+  function clearScheduledBroadcast(sessionId: string): void {
+    const timeout = nextBroadcastTimeoutBySessionId.get(sessionId);
+
+    if (!timeout) {
+      return;
+    }
+
+    clearTimeout(timeout);
+    nextBroadcastTimeoutBySessionId.delete(sessionId);
+  }
+
+  function scheduleNextBroadcast(sessionId: string, sessionView: {
+    snapshot?: {
+      sessionState?: {
+        objects?: Record<string, Record<string, unknown>>;
+      };
+    };
+  } | undefined): void {
+    clearScheduledBroadcast(sessionId);
+
+    if ((clientsBySessionId.get(sessionId)?.size ?? 0) === 0) {
+      return;
+    }
+
+    const nextUpdateAtMs = getNextRuntimeSessionBroadcastAtMs(sessionView);
+
+    if (!Number.isFinite(nextUpdateAtMs)) {
+      return;
+    }
+
+    const delayMs = Math.max(0, (nextUpdateAtMs as number) - Date.now()) + 50;
+    const timeout = setTimeout(() => {
+      void broadcastSession(sessionId);
+    }, delayMs);
+    nextBroadcastTimeoutBySessionId.set(sessionId, timeout);
+  }
+
+  async function broadcastSession(sessionId: string): Promise<void> {
+    const sessionView = await runtimeApi.getSession(sessionId);
+    const clients = clientsBySessionId.get(sessionId);
+
+    if (!clients || clients.size === 0) {
+      clearScheduledBroadcast(sessionId);
+      return;
+    }
+
+    if (!sessionView) {
+      clearScheduledBroadcast(sessionId);
+
+      for (const client of [...clients]) {
+        clients.delete(client);
+        client.close();
+      }
+
+      clientsBySessionId.delete(sessionId);
+      return;
+    }
+
+    for (const client of [...clients]) {
+      try {
+        client.write(sessionView);
+      } catch {
+        clients.delete(client);
+        client.close();
+      }
+    }
+
+    scheduleNextBroadcast(sessionId, sessionView);
+  }
+
+  return {
+    async connect(sessionId: string, req: { on?: (event: string, listener: () => void) => void }, res: {
+      statusCode: number;
+      setHeader(name: string, value: string): void;
+      end(body?: string): void;
+      write?: (chunk: string) => void;
+      flushHeaders?: () => void;
+    }) {
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+
+      if (typeof res.write !== 'function') {
+        res.end();
+        return;
+      }
+
+      const client: RuntimeSessionClient = {
+        write(sessionView) {
+          res.write?.(`data: ${JSON.stringify(sessionView)}\n\n`);
+        },
+        close() {
+          res.end();
+        },
+      };
+
+      const clients = clientsBySessionId.get(sessionId) ?? new Set<RuntimeSessionClient>();
+      clients.add(client);
+      clientsBySessionId.set(sessionId, clients);
+
+      req.on?.('close', () => {
+        clients.delete(client);
+
+        if (clients.size === 0) {
+          clientsBySessionId.delete(sessionId);
+          clearScheduledBroadcast(sessionId);
+        }
+      });
+
+      await broadcastSession(sessionId);
+    },
+    async broadcastSession(sessionId: string) {
+      await broadcastSession(sessionId);
+    },
+  };
+}
+
+function getNextRuntimeSessionBroadcastAtMs(sessionView: {
+  snapshot?: {
+    sessionState?: {
+      objects?: Record<string, Record<string, unknown>>;
+    };
+  };
+} | undefined): number | undefined {
+  const jukeboxLobbyAtmosphereIntervalMs = 45_000;
+  const objectStates = sessionView?.snapshot?.sessionState?.objects;
+
+  if (!objectStates) {
+    return undefined;
+  }
+
+  let nextUpdateAtMs: number | undefined;
+
+  for (const objectState of Object.values(objectStates)) {
+    const currentTrackId = objectState.currentTrack;
+    const currentTrackStartedAtMs = objectState.currentTrackStartedAtMs;
+    const currentTrackEndsAtMs = objectState.currentTrackEndsAtMs;
+
+    if (typeof currentTrackStartedAtMs === 'number' && Number.isFinite(currentTrackStartedAtMs)
+      && typeof currentTrackEndsAtMs === 'number' && Number.isFinite(currentTrackEndsAtMs)
+      && typeof currentTrackId === 'string' && currentTrackId.length > 0 && currentTrackId !== 'none'
+      && currentTrackEndsAtMs > Date.now()) {
+      const nextAtmosphereTickAtMs = currentTrackStartedAtMs
+        + (Math.floor((Date.now() - currentTrackStartedAtMs) / jukeboxLobbyAtmosphereIntervalMs) + 1) * jukeboxLobbyAtmosphereIntervalMs;
+
+      if (nextAtmosphereTickAtMs > Date.now() && nextAtmosphereTickAtMs < currentTrackEndsAtMs) {
+        nextUpdateAtMs = nextUpdateAtMs === undefined
+          ? nextAtmosphereTickAtMs
+          : Math.min(nextUpdateAtMs, nextAtmosphereTickAtMs);
+      }
+    }
+  }
+
+  return nextUpdateAtMs;
 }
 
 function readJsonBody(req: { on?: (event: string, listener: (chunk?: string | Buffer) => void) => void }): Promise<Record<string, unknown>> {

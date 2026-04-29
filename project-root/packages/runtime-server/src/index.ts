@@ -36,13 +36,15 @@ import {
 import {
   createRuntimeSessionServiceForContentFiles,
   normalizeSessionStateForPersistedContinue,
+  normalizeSessionStateForPersistedWorldState,
   type CreateRuntimeSessionOptions,
   type RuntimeSessionProjectMetadata,
   type RuntimeSessionService,
   type RuntimeSessionSnapshot,
   type RuntimeSessionView,
 } from './runtimeSessionService';
-import type { ProjectedAction, ProjectedControl } from '../../projection/src';
+import type { ProjectedAction, ProjectedControl, ProjectedLogEntry } from '../../projection/src';
+import { JUKEBOX_CATALOGS, type JukeboxCatalogSong } from '../../runtime/src/jukeboxCatalogs';
 
 export * from './runtimeSessionService';
 export * from './schedulerCore';
@@ -51,6 +53,8 @@ export * from './siteAnnouncements';
 const DEFAULT_CONTENT_ROOT = 'packages/content';
 const TITLE_SCREEN_NEW_GAME_ACTION_ID = 'title_screen_new_game';
 const TITLE_SCREEN_CONTINUE_ACTION_ID = 'title_screen_continue';
+const PROTOTYPEHUB_LOBBY_DOOR_AUTO_CLOSE_MS = 10_000;
+const JUKEBOX_LOBBY_ATMOSPHERE_INTERVAL_MS = 45_000;
 
 export interface RuntimeDirectoryEntry {
   name: string;
@@ -72,12 +76,14 @@ export type RuntimeApiRouteMatch =
   | { kind: 'admin_heart_overview' }
   | { kind: 'admin_heart_project'; projectId: string }
   | { kind: 'admin_heart_reset'; projectId: string }
+  | { kind: 'admin_jukebox_reset'; projectId: string }
   | { kind: 'clock_snapshot'; projectId: string; nodeId?: string; nodeRegion?: string }
   | { kind: 'clock_stream'; projectId: string; nodeId?: string; nodeRegion?: string }
   | { kind: 'weather_stream'; projectId: string }
   | { kind: 'ambient_stream'; projectId: string }
   | { kind: 'session_create'; projectId: string }
   | { kind: 'session_restore'; projectId: string }
+  | { kind: 'session_stream'; sessionId: string }
   | { kind: 'session_snapshot'; sessionId: string }
   | { kind: 'session_action'; sessionId: string }
   | { kind: 'session_control'; sessionId: string }
@@ -95,6 +101,7 @@ export interface RuntimeApiService {
   listHeartAdminOverview(): Promise<RuntimeAdminProjectHeartSummary[]>;
   getHeartAdminProject(projectId: string): Promise<RuntimeAdminProjectHeartDetails | undefined>;
   resetProjectHearts(projectId: string): Promise<boolean>;
+  resetProjectJukeboxes(projectId: string): Promise<string[]>;
   getClockSnapshot(projectId: string, nodeId?: string, nodeRegion?: string): Promise<PreviewRuntimeClockSnapshot | undefined>;
   getWeatherProjectSnapshot(projectId: string): Promise<RuntimeWeatherProjectSnapshot | undefined>;
   getAmbientSnapshot(projectId: string): Promise<RuntimeAmbientSnapshot>;
@@ -106,9 +113,17 @@ export interface RuntimeApiService {
   resetSession(sessionId: string, destinationNodeId?: string): Promise<RuntimeSessionView | undefined>;
 }
 
-export interface PersistedRuntimeSessionSnapshot extends Omit<RuntimeSessionSnapshot, 'sessionId'> {
+export interface PersistedContinueSessionState extends Omit<RuntimeSessionSnapshot, 'sessionId'> {
   savedAt: number;
 }
+
+export interface PersistedProjectWorldState {
+  projectId: string;
+  sessionState: RuntimeSessionState;
+  savedAt: number;
+}
+
+export type PersistedRuntimeSessionSnapshot = PersistedContinueSessionState;
 
 export interface RuntimeHeartCount {
   projectId: string;
@@ -196,6 +211,15 @@ export function matchRuntimeApiRequest(url: string): RuntimeApiRouteMatch | unde
     };
   }
 
+  const adminJukeboxResetMatch = /^\/api\/runtime-admin\/jukeboxes\/([^/?#]+)\/reset(?:\?.*)?$/.exec(url);
+
+  if (adminJukeboxResetMatch) {
+    return {
+      kind: 'admin_jukebox_reset',
+      projectId: decodeURIComponent(adminJukeboxResetMatch[1]),
+    };
+  }
+
   const adminHeartProjectMatch = /^\/api\/runtime-admin\/hearts\/([^/?#]+)(?:\?.*)?$/.exec(url);
 
   if (adminHeartProjectMatch) {
@@ -266,6 +290,15 @@ export function matchRuntimeApiRequest(url: string): RuntimeApiRouteMatch | unde
     };
   }
 
+  const sessionStreamMatch = /^\/api\/runtime-session\/([^/?#]+)\/stream(?:\?.*)?$/.exec(url);
+
+  if (sessionStreamMatch) {
+    return {
+      kind: 'session_stream',
+      sessionId: decodeURIComponent(sessionStreamMatch[1]),
+    };
+  }
+
   const sessionSnapshotMatch = /^\/api\/runtime-session\/([^/?#]+)(?:\?.*)?$/.exec(url);
 
   if (sessionSnapshotMatch) {
@@ -325,7 +358,8 @@ export function createRuntimeApiService(
   options: {
     contentRoot?: string;
     now?: () => number;
-    snapshotStore?: KeyValueStore<PersistedRuntimeSessionSnapshot>;
+    continueStore?: KeyValueStore<PersistedContinueSessionState>;
+    worldStateStore?: KeyValueStore<PersistedProjectWorldState>;
     heartStore?: KeyValueStore<number>;
     siteAnnouncementStore?: KeyValueStore<SiteAnnouncementRecord>;
     adminPassword?: string;
@@ -334,7 +368,8 @@ export function createRuntimeApiService(
 ): RuntimeApiService {
   const contentRoot = options.contentRoot ?? DEFAULT_CONTENT_ROOT;
   const now = options.now ?? (() => Date.now());
-  const snapshotStore = options.snapshotStore ?? createMemorySnapshotStore();
+  const continueStore = options.continueStore ?? createMemoryValueStore<PersistedContinueSessionState>();
+  const worldStateStore = options.worldStateStore ?? createMemoryValueStore<PersistedProjectWorldState>();
   const heartStore = options.heartStore ?? createMemoryValueStore<number>();
   const siteAnnouncementStore = options.siteAnnouncementStore ?? createMemoryValueStore<SiteAnnouncementRecord>();
   const adminPassword = options.adminPassword;
@@ -343,6 +378,7 @@ export function createRuntimeApiService(
   const weatherAnchorMsByPatternKey = new Map<string, number>();
   const runtimeSessionServicesBySessionId = new Map<string, RuntimeSessionService>();
   const sessionProjectIdsBySessionId = new Map<string, string>();
+  const pendingRuntimeOperationByProjectId = new Map<string, Promise<void>>();
   const lastObservedTimeBySessionId = new Map<string, { nodeId?: string; snapshot?: RuntimeTimeSnapshot }>();
   const lastObservedWeatherBySessionId = new Map<string, { nodeId?: string; snapshot?: RuntimeWeatherSnapshot }>();
   const lastObservedAmbientBySessionId = new Map<string, Record<string, RuntimeAmbientNpcSnapshot>>();
@@ -494,9 +530,9 @@ export function createRuntimeApiService(
       }
 
       const contentProjectRecord = buildContentProjectRecord(projectId, 'playable-demo');
-      const persistedSnapshot = await snapshotStore.get(projectSnapshotKey(projectId));
+      const persistedWorldState = await getPersistedProjectWorldState(worldStateStore, continueStore, projectId);
       const stateSeeds = await extractProjectStateSeeds(store, contentRoot, projectId);
-      const liveSessionState = extractLiveProjectState(persistedSnapshot?.sessionState);
+      const liveSessionState = extractLiveProjectState(persistedWorldState?.sessionState);
       const currentObjectStateById = liveSessionState.sessionObjectStateById ?? stateSeeds.sessionObjectStateById;
       const objectFieldDetailsById = await extractProjectObjectFieldDetails(
         store,
@@ -545,6 +581,69 @@ export function createRuntimeApiService(
       }
 
       return found;
+    },
+    async resetProjectJukeboxes(projectId) {
+      const savedAt = now();
+      const activeSessionIds: string[] = [];
+      const persistedWorldState = await worldStateStore.get(projectWorldStateKey(projectId));
+      const persistedContinueState = await getPersistedContinueState(continueStore, projectId);
+      const resetWorldState = persistedWorldState
+        ? resetJukeboxObjectState(persistedWorldState.sessionState)
+        : undefined;
+      const resetContinueSessionState = persistedContinueState
+        ? resetJukeboxObjectState(persistedContinueState.sessionState)
+        : undefined;
+      const resetContinueRecentLog = persistedContinueState
+        ? stripJukeboxQueueEntries(persistedContinueState.recentLogByNodeId)
+        : undefined;
+
+      if (persistedWorldState && resetWorldState?.changed) {
+        await worldStateStore.set(projectWorldStateKey(projectId), {
+          ...persistedWorldState,
+          sessionState: normalizeSessionStateForPersistedWorldState(resetWorldState.sessionState),
+          savedAt,
+        });
+      }
+
+      if (persistedContinueState && (resetContinueSessionState?.changed || resetContinueRecentLog?.changed)) {
+        await continueStore.set(projectContinueStateKey(projectId), {
+          ...persistedContinueState,
+          sessionState: normalizeSessionStateForPersistedContinue(
+            resetContinueSessionState?.sessionState ?? persistedContinueState.sessionState,
+          ),
+          recentLogByNodeId: resetContinueRecentLog?.recentLogByNodeId ?? persistedContinueState.recentLogByNodeId,
+          savedAt,
+        });
+        await continueStore.delete(legacyProjectSnapshotKey(projectId));
+      }
+
+      for (const [sessionId, sessionProjectId] of sessionProjectIdsBySessionId.entries()) {
+        if (sessionProjectId !== projectId) {
+          continue;
+        }
+
+        const runtimeSessionService = runtimeSessionServicesBySessionId.get(sessionId);
+        const currentSessionView = runtimeSessionService?.getSession(sessionId);
+
+        if (!runtimeSessionService || !currentSessionView) {
+          continue;
+        }
+
+        const resetSnapshot = resetJukeboxSnapshot(currentSessionView.snapshot);
+
+        if (!resetSnapshot.changed) {
+          continue;
+        }
+
+        const { sessionId: ignoredSessionId, ...replacementSnapshot } = resetSnapshot.snapshot;
+        void ignoredSessionId;
+
+        if (runtimeSessionService.replaceSession(sessionId, replacementSnapshot)) {
+          activeSessionIds.push(sessionId);
+        }
+      }
+
+      return activeSessionIds;
     },
     async getClockSnapshot(projectId, nodeId, nodeRegion) {
       const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
@@ -597,124 +696,171 @@ export function createRuntimeApiService(
       return resolveRuntimeAmbientSnapshot(npcDefinitionsById, now(), undefined, npcStateSeedsById);
     },
     async createSession(projectId, sessionOptions) {
-      const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
-      const sessionView = runtimeSessionService?.createSession(projectId, sessionOptions);
+      return runProjectOperation(projectId, async () => {
+        const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
+        const sessionView = runtimeSessionService?.createSession(projectId, sessionOptions);
 
-      if (sessionView && runtimeSessionService) {
-        rememberSession(projectId, sessionView.snapshot.sessionId, runtimeSessionService);
-      }
+        if (sessionView && runtimeSessionService) {
+          rememberSession(projectId, sessionView.snapshot.sessionId, runtimeSessionService);
+        }
 
-      return decorateAndPersistSessionView(runtimeSessionService, sessionView);
+        return decorateAndPersistSessionView(runtimeSessionService, sessionView);
+      });
     },
     async restoreSession(projectId, snapshot) {
-      const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
-      const sessionView = runtimeSessionService?.restoreSession(projectId, snapshot);
+      return runProjectOperation(projectId, async () => {
+        const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
+        const sessionView = runtimeSessionService?.restoreSession(projectId, snapshot);
 
-      if (sessionView && runtimeSessionService) {
-        rememberSession(projectId, sessionView.snapshot.sessionId, runtimeSessionService);
-      }
+        if (sessionView && runtimeSessionService) {
+          rememberSession(projectId, sessionView.snapshot.sessionId, runtimeSessionService);
+        }
 
-      return decorateAndPersistSessionView(runtimeSessionService, sessionView);
+        return decorateAndPersistSessionView(runtimeSessionService, sessionView);
+      });
     },
     async getSession(sessionId) {
-      const runtimeSessionService = await getRuntimeSessionServiceForSession(sessionId);
-      return decorateAndPersistSessionView(runtimeSessionService, runtimeSessionService?.getSession(sessionId));
+      const projectId = sessionProjectIdsBySessionId.get(sessionId);
+
+      return runProjectOperation(projectId, async () => {
+        const runtimeSessionService = await getRuntimeSessionServiceForSession(sessionId);
+        return decorateAndPersistSessionView(runtimeSessionService, runtimeSessionService?.getSession(sessionId));
+      });
     },
     async applySessionAction(sessionId, action) {
-      const runtimeSessionService = await getRuntimeSessionServiceForSession(sessionId);
+      const projectId = sessionProjectIdsBySessionId.get(sessionId);
 
-      if (!runtimeSessionService) {
-        return undefined;
-      }
+      return runProjectOperation(projectId, async () => {
+        const runtimeSessionService = await getRuntimeSessionServiceForSession(sessionId);
 
-      if (action.id === TITLE_SCREEN_NEW_GAME_ACTION_ID) {
-        const currentSessionView = runtimeSessionService.getSession(sessionId);
-        const newGameAction = selectFreshStartAction(currentSessionView?.page);
-        const sessionView = newGameAction ? runtimeSessionService.applyAction(sessionId, newGameAction) : undefined;
+        if (!runtimeSessionService) {
+          return undefined;
+        }
 
-        if (sessionView) {
+        if (action.id === TITLE_SCREEN_NEW_GAME_ACTION_ID) {
+          const currentSessionView = runtimeSessionService.getSession(sessionId);
+          const newGameAction = selectFreshStartAction(currentSessionView?.page);
+          const sessionView = newGameAction ? runtimeSessionService.applyAction(sessionId, newGameAction) : undefined;
+
+          if (sessionView) {
+            rememberSession(sessionView.snapshot.projectId, sessionView.snapshot.sessionId, runtimeSessionService, sessionId);
+          }
+
+          return decorateAndPersistSessionView(runtimeSessionService, sessionView);
+        }
+
+        if (action.id === TITLE_SCREEN_CONTINUE_ACTION_ID) {
+          const persistedSnapshot = projectId ? await getPersistedContinueState(continueStore, projectId) : undefined;
+          const freshRuntimeSessionService = projectId ? await createFreshRuntimeSessionService(projectId) : undefined;
+          const sessionView = projectId && persistedSnapshot && freshRuntimeSessionService
+            ? freshRuntimeSessionService.restoreSession(projectId, persistedSnapshot)
+            : undefined;
+
+          if (sessionView && freshRuntimeSessionService && projectId) {
+            rememberSession(projectId, sessionView.snapshot.sessionId, freshRuntimeSessionService, sessionId);
+          }
+
+          return decorateAndPersistSessionView(freshRuntimeSessionService, sessionView);
+        }
+
+        const sessionView = runtimeSessionService.applyAction(sessionId, action);
+
+        if (sessionView && runtimeSessionService) {
           rememberSession(sessionView.snapshot.projectId, sessionView.snapshot.sessionId, runtimeSessionService, sessionId);
         }
 
         return decorateAndPersistSessionView(runtimeSessionService, sessionView);
-      }
-
-      if (action.id === TITLE_SCREEN_CONTINUE_ACTION_ID) {
-        const projectId = sessionProjectIdsBySessionId.get(sessionId);
-        const persistedSnapshot = projectId ? await snapshotStore.get(projectSnapshotKey(projectId)) : undefined;
-        const freshRuntimeSessionService = projectId ? await createFreshRuntimeSessionService(projectId) : undefined;
-        const sessionView = projectId && persistedSnapshot && freshRuntimeSessionService
-          ? freshRuntimeSessionService.restoreSession(projectId, persistedSnapshot)
-          : undefined;
-
-        if (sessionView && freshRuntimeSessionService && projectId) {
-          rememberSession(projectId, sessionView.snapshot.sessionId, freshRuntimeSessionService, sessionId);
-        }
-
-        return decorateAndPersistSessionView(freshRuntimeSessionService, sessionView);
-      }
-
-      const sessionView = runtimeSessionService.applyAction(sessionId, action);
-
-      if (sessionView && runtimeSessionService) {
-        rememberSession(sessionView.snapshot.projectId, sessionView.snapshot.sessionId, runtimeSessionService, sessionId);
-      }
-
-      return decorateAndPersistSessionView(runtimeSessionService, sessionView);
+      });
     },
     async applySessionControl(sessionId, control) {
-      const runtimeSessionService = await getRuntimeSessionServiceForSession(sessionId);
-      const sessionView = runtimeSessionService?.applyControl(sessionId, control);
+      const projectId = sessionProjectIdsBySessionId.get(sessionId);
 
-      if (sessionView && runtimeSessionService) {
-        rememberSession(sessionView.snapshot.projectId, sessionView.snapshot.sessionId, runtimeSessionService, sessionId);
-      }
+      return runProjectOperation(projectId, async () => {
+        const runtimeSessionService = await getRuntimeSessionServiceForSession(sessionId);
+        const sessionView = runtimeSessionService?.applyControl(sessionId, control);
 
-      return decorateAndPersistSessionView(runtimeSessionService, sessionView);
+        if (sessionView && runtimeSessionService) {
+          rememberSession(sessionView.snapshot.projectId, sessionView.snapshot.sessionId, runtimeSessionService, sessionId);
+        }
+
+        return decorateAndPersistSessionView(runtimeSessionService, sessionView);
+      });
     },
     async resetSession(sessionId, destinationNodeId) {
       const projectId = sessionProjectIdsBySessionId.get(sessionId);
-      const runtimeSessionService = await getRuntimeSessionServiceForSession(sessionId);
 
-      if (!projectId || !runtimeSessionService) {
-        return undefined;
-      }
+      return runProjectOperation(projectId, async () => {
+        const runtimeSessionService = await getRuntimeSessionServiceForSession(sessionId);
 
-      const currentSessionView = runtimeSessionService.getSession(sessionId);
+        if (!projectId || !runtimeSessionService) {
+          return undefined;
+        }
 
-      if (!currentSessionView) {
-        clearSession(sessionId);
-        return undefined;
-      }
+        const currentSessionView = runtimeSessionService.getSession(sessionId);
 
-      const freshRuntimeSessionService = await createFreshRuntimeSessionService(projectId);
-      const restoredSessionView = freshRuntimeSessionService?.restoreSession(projectId, {
-        projectId: currentSessionView.snapshot.projectId,
-        route: currentSessionView.snapshot.route,
-        areaVisitCounts: currentSessionView.snapshot.areaVisitCounts,
-        pathVisitCounts: currentSessionView.snapshot.pathVisitCounts,
-        recentLogByNodeId: currentSessionView.snapshot.recentLogByNodeId,
-        actionAttemptsByNodeId: currentSessionView.snapshot.actionAttemptsByNodeId,
-        sessionState: currentSessionView.snapshot.sessionState,
+        if (!currentSessionView) {
+          clearSession(sessionId);
+          return undefined;
+        }
+
+        const freshRuntimeSessionService = await createFreshRuntimeSessionService(projectId);
+        const restoredSessionView = freshRuntimeSessionService?.restoreSession(projectId, {
+          projectId: currentSessionView.snapshot.projectId,
+          route: currentSessionView.snapshot.route,
+          areaVisitCounts: currentSessionView.snapshot.areaVisitCounts,
+          pathVisitCounts: currentSessionView.snapshot.pathVisitCounts,
+          recentLogByNodeId: currentSessionView.snapshot.recentLogByNodeId,
+          actionAttemptsByNodeId: currentSessionView.snapshot.actionAttemptsByNodeId,
+          sessionState: currentSessionView.snapshot.sessionState,
+        });
+
+        if (!restoredSessionView || !freshRuntimeSessionService) {
+          return undefined;
+        }
+
+        const resetView = freshRuntimeSessionService.resetSession(restoredSessionView.snapshot.sessionId, destinationNodeId);
+
+        if (!resetView) {
+          return undefined;
+        }
+
+        rememberSession(projectId, resetView.snapshot.sessionId, freshRuntimeSessionService, sessionId);
+        return decorateAndPersistSessionView(freshRuntimeSessionService, resetView, { clearExistingSnapshot: true });
       });
-
-      if (!restoredSessionView || !freshRuntimeSessionService) {
-        return undefined;
-      }
-
-      const resetView = freshRuntimeSessionService.resetSession(restoredSessionView.snapshot.sessionId, destinationNodeId);
-
-      if (!resetView) {
-        return undefined;
-      }
-
-      rememberSession(projectId, resetView.snapshot.sessionId, freshRuntimeSessionService, sessionId);
-      return decorateAndPersistSessionView(freshRuntimeSessionService, resetView, { clearExistingSnapshot: true });
     },
   };
 
   async function getRuntimeSessionServiceForSession(sessionId: string): Promise<RuntimeSessionService | undefined> {
     return runtimeSessionServicesBySessionId.get(sessionId);
+  }
+
+  async function runProjectOperation<TResult>(
+    projectId: string | undefined,
+    operation: () => Promise<TResult>,
+  ): Promise<TResult> {
+    if (!projectId) {
+      return operation();
+    }
+
+    const previous = pendingRuntimeOperationByProjectId.get(projectId) ?? Promise.resolve();
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    const queued = previous.catch(() => undefined).then(() => current);
+
+    pendingRuntimeOperationByProjectId.set(projectId, queued);
+    await previous.catch(() => undefined);
+
+    try {
+      return await operation();
+    } finally {
+      releaseCurrent();
+
+      if (pendingRuntimeOperationByProjectId.get(projectId) === queued) {
+        pendingRuntimeOperationByProjectId.delete(projectId);
+      }
+    }
   }
 
   async function getProjectHeartTotal(projectId: string): Promise<number> {
@@ -780,6 +926,7 @@ export function createRuntimeApiService(
     }
 
     let projectMetadata: RuntimeSessionProjectMetadata | undefined;
+    const persistedWorldState = await getPersistedProjectWorldState(worldStateStore, continueStore, projectId);
     const runtimeClockSource: RuntimeClockSource = {
       getSnapshot(requestedProjectId, nodeId) {
         if (requestedProjectId !== projectId || !projectMetadata?.timeSettings) {
@@ -798,6 +945,9 @@ export function createRuntimeApiService(
     };
     const runtimeSessionService = createRuntimeSessionServiceForContentFiles(contentFiles, {
       clockSource: runtimeClockSource,
+      initialSessionStateByProjectId: persistedWorldState?.sessionState
+        ? { [projectId]: persistedWorldState.sessionState }
+        : undefined,
     });
     projectMetadata = runtimeSessionService.getProjectMetadata(projectId);
     return runtimeSessionService;
@@ -841,29 +991,39 @@ export function createRuntimeApiService(
     }
 
     const projectMetadata = runtimeSessionService.getProjectMetadata(sessionView.snapshot.projectId);
+    const savedAtMs = now();
+    const persistedContinueSessionState = buildPersistedContinueSessionState(sessionView.snapshot.sessionState);
+    const persistedWorldState = buildPersistedProjectWorldState(sessionView.snapshot.projectId, sessionView.snapshot.sessionState, savedAtMs);
+
+    await worldStateStore.set(projectWorldStateKey(sessionView.snapshot.projectId), persistedWorldState);
 
     if (options.clearExistingSnapshot && shouldClearProjectSnapshotOnReset(projectMetadata?.titleScreenSaveMode)) {
-      await snapshotStore.delete(projectSnapshotKey(sessionView.snapshot.projectId));
+      await continueStore.delete(projectContinueStateKey(sessionView.snapshot.projectId));
+      await continueStore.delete(legacyProjectSnapshotKey(sessionView.snapshot.projectId));
     }
 
     if (projectMetadata && shouldPersistSessionSnapshot(sessionView.snapshot.route.nodeId, projectMetadata.titleScreenSaveMode)) {
-      const persistedSessionState = buildPersistedContinueSessionState(sessionView.snapshot.sessionState);
-
-      await snapshotStore.set(projectSnapshotKey(sessionView.snapshot.projectId), {
+      await continueStore.set(projectContinueStateKey(sessionView.snapshot.projectId), {
         projectId: sessionView.snapshot.projectId,
         route: sessionView.snapshot.route,
         areaVisitCounts: sessionView.snapshot.areaVisitCounts,
         pathVisitCounts: sessionView.snapshot.pathVisitCounts,
         recentLogByNodeId: sessionView.snapshot.recentLogByNodeId,
         actionAttemptsByNodeId: sessionView.snapshot.actionAttemptsByNodeId,
-        sessionState: persistedSessionState,
-        savedAt: now(),
+        sessionState: persistedContinueSessionState,
+        savedAt: savedAtMs,
       });
     }
 
-    const persistedSnapshot = await snapshotStore.get(projectSnapshotKey(sessionView.snapshot.projectId));
+    const persistedSnapshot = await getPersistedContinueState(continueStore, sessionView.snapshot.projectId);
     const page = sessionView.page && sessionView.page.kind === 'page'
-      ? decorateTitleScreenPage(sessionView.page, projectMetadata, persistedSnapshot)
+      ? decorateRuntimeSessionPage(
+          sessionView.page,
+          sessionView.snapshot.sessionState,
+          savedAtMs,
+          projectMetadata,
+          persistedSnapshot,
+        )
       : sessionView.page;
 
     return {
@@ -887,6 +1047,35 @@ export function createRuntimeApiService(
     let nextSessionState = sessionView.snapshot.sessionState;
     let nextRecentLogByNodeId = sessionView.snapshot.recentLogByNodeId;
     let changed = false;
+    const doorWasOpen = isPrototypeHubLobbyDoorOpen(nextSessionState);
+
+    const autoClosedDoorSessionState = reconcilePrototypeHubLobbyDoor(nextSessionState, now());
+
+    if (autoClosedDoorSessionState !== nextSessionState) {
+      nextSessionState = autoClosedDoorSessionState;
+      changed = true;
+
+      if (doorWasOpen && currentNodeId) {
+        nextRecentLogByNodeId = appendRecentLogEntry(
+          nextRecentLogByNodeId,
+          currentNodeId,
+          createPrototypeHubLobbyDoorClosedLogEntry(now()),
+        );
+      }
+    }
+
+    const jukeboxAtmosphereUpdate = appendPeriodicJukeboxAtmosphereLog(
+      sessionView.page,
+      nextSessionState,
+      nextRecentLogByNodeId,
+      now(),
+    );
+
+    if (jukeboxAtmosphereUpdate.changed) {
+      nextSessionState = jukeboxAtmosphereUpdate.sessionState;
+      nextRecentLogByNodeId = jukeboxAtmosphereUpdate.recentLogByNodeId;
+      changed = true;
+    }
 
     const ambientSnapshot = await collectAmbientSnapshot(sessionView.snapshot.projectId);
     const previousAmbientByNpcId = lastObservedAmbientBySessionId.get(sessionView.snapshot.sessionId) ?? {};
@@ -1091,32 +1280,6 @@ export function createRuntimeApiService(
   }
 }
 
-function createMemorySnapshotStore(): KeyValueStore<PersistedRuntimeSessionSnapshot> {
-  const values = new Map<string, PersistedRuntimeSessionSnapshot>();
-
-  return {
-    async get(key) {
-      return values.get(key);
-    },
-    async set(key, value) {
-      values.set(key, value);
-    },
-    async delete(key) {
-      values.delete(key);
-    },
-    async has(key) {
-      return values.has(key);
-    },
-    async *list(prefix) {
-      for (const [key, value] of values.entries()) {
-        if (!prefix || key === prefix || key.startsWith(`${prefix}/`)) {
-          yield { key, value };
-        }
-      }
-    },
-  };
-}
-
 function createMemoryValueStore<TValue>(): KeyValueStore<TValue> {
   const values = new Map<string, TValue>();
 
@@ -1151,8 +1314,390 @@ function projectNodeHeartKey(projectId: string, nodeId: string): string {
   return `${projectHeartPrefix(projectId)}/${nodeId}`;
 }
 
-function projectSnapshotKey(projectId: string): string {
+function projectContinueStateKey(projectId: string): string {
+  return `projects/${projectId}/continue-state`;
+}
+
+function projectWorldStateKey(projectId: string): string {
+  return `projects/${projectId}/world-state`;
+}
+
+function legacyProjectSnapshotKey(projectId: string): string {
   return `projects/${projectId}/snapshot`;
+}
+
+function legacyProjectSharedStateKey(projectId: string): string {
+  return `projects/${projectId}/shared-state`;
+}
+
+async function getPersistedContinueState(
+  continueStore: KeyValueStore<PersistedContinueSessionState>,
+  projectId: string,
+): Promise<PersistedContinueSessionState | undefined> {
+  return (await continueStore.get(projectContinueStateKey(projectId)))
+    ?? continueStore.get(legacyProjectSnapshotKey(projectId));
+}
+
+async function getPersistedProjectWorldState(
+  worldStateStore: KeyValueStore<PersistedProjectWorldState>,
+  continueStore: KeyValueStore<PersistedContinueSessionState>,
+  projectId: string,
+): Promise<PersistedProjectWorldState | undefined> {
+  const persistedWorldState = await worldStateStore.get(projectWorldStateKey(projectId));
+
+  if (persistedWorldState) {
+    return persistedWorldState;
+  }
+
+  const persistedContinueState = await getPersistedContinueState(continueStore, projectId);
+
+  return persistedContinueState
+    ? {
+        projectId,
+        sessionState: persistedContinueState.sessionState,
+        savedAt: persistedContinueState.savedAt,
+      }
+    : undefined;
+}
+
+function resetJukeboxSnapshot(
+  snapshot: RuntimeSessionSnapshot,
+): { snapshot: RuntimeSessionSnapshot; changed: boolean } {
+  const resetSessionState = resetJukeboxObjectState(snapshot.sessionState);
+  const resetRecentLog = stripJukeboxQueueEntries(snapshot.recentLogByNodeId);
+
+  if (!resetSessionState.changed && !resetRecentLog.changed) {
+    return {
+      snapshot,
+      changed: false,
+    };
+  }
+
+  return {
+    snapshot: {
+      ...snapshot,
+      sessionState: resetSessionState.sessionState,
+      recentLogByNodeId: resetRecentLog.recentLogByNodeId,
+    },
+    changed: true,
+  };
+}
+
+function reconcilePrototypeHubLobbyDoor(
+  sessionState: RuntimeSessionState,
+  nowMs: number,
+): RuntimeSessionState {
+  const objects = sessionState.objects;
+  const doorState = objects && typeof objects === 'object' && !Array.isArray(objects)
+    ? objects.prototypehub_lobby_door
+    : undefined;
+
+  if (!doorState || typeof doorState !== 'object' || Array.isArray(doorState)) {
+    return sessionState;
+  }
+
+  const open = doorState.open;
+
+  if (open !== true) {
+    return sessionState;
+  }
+
+  const openedAtMs = typeof doorState.openedAtMs === 'number' && Number.isFinite(doorState.openedAtMs)
+    ? doorState.openedAtMs
+    : undefined;
+
+  if (openedAtMs !== undefined && nowMs - openedAtMs < PROTOTYPEHUB_LOBBY_DOOR_AUTO_CLOSE_MS) {
+    return sessionState;
+  }
+
+  return {
+    ...sessionState,
+    objects: {
+      ...objects,
+      prototypehub_lobby_door: {
+        ...doorState,
+        open: false,
+        openedAtMs: 0,
+      },
+    },
+  };
+}
+
+function isPrototypeHubLobbyDoorOpen(sessionState: RuntimeSessionState): boolean {
+  const objects = sessionState.objects;
+  const doorState = objects && typeof objects === 'object' && !Array.isArray(objects)
+    ? objects.prototypehub_lobby_door
+    : undefined;
+
+  return Boolean(doorState && typeof doorState === 'object' && !Array.isArray(doorState) && doorState.open === true);
+}
+
+function createPrototypeHubLobbyDoorClosedLogEntry(
+  nowMs: number,
+): RuntimeSessionSnapshot['recentLogByNodeId'][string][number] {
+  return {
+    id: `prototypehub:door:closed:${nowMs}`,
+    text: 'The door swings shut.',
+    lane: 'recent',
+  };
+}
+
+function appendPeriodicJukeboxAtmosphereLog(
+  page: ProjectionResult | undefined,
+  sessionState: RuntimeSessionState,
+  recentLogByNodeId: RuntimeSessionSnapshot['recentLogByNodeId'],
+  nowMs: number,
+): {
+  sessionState: RuntimeSessionState;
+  recentLogByNodeId: RuntimeSessionSnapshot['recentLogByNodeId'];
+  changed: boolean;
+} {
+  if (!page || page.kind !== 'page' || !page.nodeId) {
+    return {
+      sessionState,
+      recentLogByNodeId,
+      changed: false,
+    };
+  }
+
+  let nextSessionState = sessionState;
+  let nextRecentLogByNodeId = recentLogByNodeId;
+  let changed = false;
+
+  for (const action of page.actions) {
+    if (action.kind !== 'poi') {
+      continue;
+    }
+
+    const objectStates = asRuntimeRecord(nextSessionState.objects);
+    const objectState = asRuntimeRecord(objectStates?.[action.id]);
+
+    if (!isJukeboxObjectState(objectState)) {
+      continue;
+    }
+
+    const currentTrackId = typeof objectState.currentTrack === 'string' && objectState.currentTrack !== 'none'
+      ? objectState.currentTrack
+      : undefined;
+    const currentTrackStartedAtMs = typeof objectState.currentTrackStartedAtMs === 'number' && Number.isFinite(objectState.currentTrackStartedAtMs)
+      ? objectState.currentTrackStartedAtMs
+      : undefined;
+    const currentTrackEndsAtMs = typeof objectState.currentTrackEndsAtMs === 'number' && Number.isFinite(objectState.currentTrackEndsAtMs)
+      ? objectState.currentTrackEndsAtMs
+      : undefined;
+    const previousTrackId = typeof objectState.lobbyAtmosphereTrackId === 'string'
+      ? objectState.lobbyAtmosphereTrackId
+      : '';
+    const previousTick = typeof objectState.lobbyAtmosphereTick === 'number' && Number.isFinite(objectState.lobbyAtmosphereTick)
+      ? Math.max(0, Math.floor(objectState.lobbyAtmosphereTick))
+      : 0;
+
+    if (!currentTrackId || typeof currentTrackStartedAtMs !== 'number' || typeof currentTrackEndsAtMs !== 'number' || currentTrackEndsAtMs <= nowMs) {
+      if (previousTrackId || previousTick > 0) {
+        nextSessionState = setRuntimeObjectState(nextSessionState, action.id, {
+          ...objectState,
+          lobbyAtmosphereTrackId: '',
+          lobbyAtmosphereTick: 0,
+        });
+        changed = true;
+      }
+
+      continue;
+    }
+
+    const song = findJukeboxCatalogSongById(currentTrackId);
+
+    if (!song) {
+      continue;
+    }
+
+    let nextObjectState = objectState;
+    let baselineTick = previousTick;
+
+    if (previousTrackId !== currentTrackId) {
+      nextObjectState = {
+        ...nextObjectState,
+        lobbyAtmosphereTrackId: currentTrackId,
+        lobbyAtmosphereTick: 0,
+      };
+      baselineTick = 0;
+      nextSessionState = setRuntimeObjectState(nextSessionState, action.id, nextObjectState);
+      changed = true;
+    }
+
+    const currentTick = Math.max(0, Math.floor((nowMs - currentTrackStartedAtMs) / JUKEBOX_LOBBY_ATMOSPHERE_INTERVAL_MS));
+
+    if (currentTick <= 0 || currentTick <= baselineTick) {
+      continue;
+    }
+
+    nextObjectState = {
+      ...nextObjectState,
+      lobbyAtmosphereTrackId: currentTrackId,
+      lobbyAtmosphereTick: currentTick,
+    };
+    nextSessionState = setRuntimeObjectState(nextSessionState, action.id, nextObjectState);
+    nextRecentLogByNodeId = appendRecentLogEntry(
+      nextRecentLogByNodeId,
+      page.nodeId,
+      createJukeboxLobbyAtmosphereLogEntry(song, currentTick, nowMs),
+    );
+    changed = true;
+  }
+
+  return {
+    sessionState: nextSessionState,
+    recentLogByNodeId: nextRecentLogByNodeId,
+    changed,
+  };
+}
+
+function createJukeboxLobbyAtmosphereLogEntry(
+  song: JukeboxCatalogSong,
+  tick: number,
+  nowMs: number,
+): RuntimeSessionSnapshot['recentLogByNodeId'][string][number] {
+  return {
+    id: `jukebox:atmosphere:${song.id}:${tick}:${nowMs}`,
+    text: selectJukeboxLobbyAtmosphereText(song, tick),
+    lane: 'recent',
+  };
+}
+
+function selectJukeboxLobbyAtmosphereText(song: JukeboxCatalogSong, tick: number): string {
+  const marqueeTexts = song.marqueeTexts.filter((text) => text.length > 0);
+  const flavorTexts = song.flavorTexts.filter((text) => text.length > 0);
+  const interleavedTexts = Array.from({ length: Math.max(marqueeTexts.length, flavorTexts.length) }).flatMap((_, index) => [
+    marqueeTexts[index],
+    flavorTexts[index],
+  ].filter((entry): entry is string => typeof entry === 'string' && entry.length > 0));
+  const texts = interleavedTexts.length > 0
+    ? interleavedTexts
+    : [...marqueeTexts, ...flavorTexts];
+
+  if (texts.length === 0) {
+    return `${song.title} keeps playing through the room.`;
+  }
+
+  return texts[(Math.max(1, tick) - 1) % texts.length] ?? texts[0];
+}
+
+function findJukeboxCatalogSongById(songId: string): JukeboxCatalogSong | undefined {
+  for (const catalog of Object.values(JUKEBOX_CATALOGS)) {
+    const song = catalog.find((entry) => entry.id === songId);
+
+    if (song) {
+      return song;
+    }
+  }
+
+  return undefined;
+}
+
+function setRuntimeObjectState(
+  sessionState: RuntimeSessionState,
+  objectId: string,
+  objectState: Record<string, unknown>,
+): RuntimeSessionState {
+  return {
+    ...sessionState,
+    objects: {
+      ...(asRuntimeRecord(sessionState.objects) ?? {}),
+      [objectId]: objectState,
+    },
+  };
+}
+
+function resetJukeboxObjectState(
+  sessionState: RuntimeSessionState,
+): { sessionState: RuntimeSessionState; changed: boolean } {
+  const objects = sessionState.objects;
+
+  if (!objects || typeof objects !== 'object' || Array.isArray(objects)) {
+    return {
+      sessionState,
+      changed: false,
+    };
+  }
+
+  let changed = false;
+  const nextObjects: Record<string, unknown> = { ...objects };
+
+  for (const [objectId, objectState] of Object.entries(objects)) {
+    if (!isJukeboxObjectState(objectState)) {
+      continue;
+    }
+
+    const nextObjectState = {
+      ...objectState,
+      fakeCredits: 0,
+      currentTrack: 'none',
+      currentTrackLabel: '',
+      currentTrackMode: '',
+      currentTrackStartedAtMs: 0,
+      currentTrackEndsAtMs: 0,
+      queueTrackIds: [],
+      lobbyAtmosphereTrackId: '',
+      lobbyAtmosphereTick: 0,
+    } satisfies Record<string, unknown>;
+
+    if (JSON.stringify(nextObjectState) === JSON.stringify(objectState)) {
+      continue;
+    }
+
+    nextObjects[objectId] = nextObjectState;
+    changed = true;
+  }
+
+  return changed
+    ? {
+        sessionState: {
+          ...sessionState,
+          objects: nextObjects,
+        },
+        changed: true,
+      }
+    : {
+        sessionState,
+        changed: false,
+      };
+}
+
+function stripJukeboxQueueEntries(
+  recentLogByNodeId: RuntimeSessionSnapshot['recentLogByNodeId'],
+): { recentLogByNodeId: RuntimeSessionSnapshot['recentLogByNodeId']; changed: boolean } {
+  let changed = false;
+  const nextRecentLogByNodeId = Object.fromEntries(
+    Object.entries(recentLogByNodeId).map(([nodeId, entries]) => {
+      const nextEntries = entries.filter((entry) => !isJukeboxQueueLogEntry(entry));
+
+      if (nextEntries.length !== entries.length) {
+        changed = true;
+      }
+
+      return [nodeId, nextEntries];
+    }),
+  );
+
+  return {
+    recentLogByNodeId: nextRecentLogByNodeId,
+    changed,
+  };
+}
+
+function isJukeboxObjectState(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+
+  return 'currentTrack' in value
+    || 'queueTrackIds' in value
+    || 'fakeCredits' in value;
+}
+
+function isJukeboxQueueLogEntry(entry: ProjectedLogEntry): boolean {
+  return Array.isArray(entry.blocks)
+    && entry.blocks.some((block) => block.groupId === 'jukebox-queue');
 }
 
 function createSiteAnnouncementId(nowMs: number): string {
@@ -1178,6 +1723,18 @@ function buildPersistedContinueSessionState(
   return normalizeSessionStateForPersistedContinue(sessionState);
 }
 
+function buildPersistedProjectWorldState(
+  projectId: string,
+  sessionState: RuntimeSessionState,
+  savedAt: number,
+): PersistedProjectWorldState {
+  return {
+    projectId,
+    sessionState: normalizeSessionStateForPersistedWorldState(sessionState),
+    savedAt,
+  };
+}
+
 function isTitleScreenNode(
   projectMetadata: RuntimeSessionProjectMetadata,
   nodeId: string,
@@ -1188,7 +1745,7 @@ function isTitleScreenNode(
 function decorateTitleScreenPage(
   page: Extract<RuntimeSessionView['page'], { kind: 'page' }>,
   projectMetadata: RuntimeSessionProjectMetadata | undefined,
-  persistedSnapshot: PersistedRuntimeSessionSnapshot | undefined,
+  persistedSnapshot: PersistedContinueSessionState | undefined,
 ): Extract<RuntimeSessionView['page'], { kind: 'page' }> {
   if (!projectMetadata || page.nodeId !== projectMetadata.startNodeId || !projectMetadata.titleScreenSaveMode) {
     return page;
@@ -1231,6 +1788,83 @@ function decorateTitleScreenPage(
   };
 }
 
+function decorateRuntimeSessionPage(
+  page: Extract<RuntimeSessionView['page'], { kind: 'page' }>,
+  sessionState: RuntimeSessionState,
+  nowMs: number,
+  projectMetadata: RuntimeSessionProjectMetadata | undefined,
+  persistedSnapshot: PersistedContinueSessionState | undefined,
+): Extract<RuntimeSessionView['page'], { kind: 'page' }> {
+  return decoratePrototypeHubLobbyAtmospherePage(
+    decorateTitleScreenPage(page, projectMetadata, persistedSnapshot),
+    sessionState,
+    nowMs,
+  );
+}
+
+function decoratePrototypeHubLobbyAtmospherePage(
+  page: Extract<RuntimeSessionView['page'], { kind: 'page' }>,
+  sessionState: RuntimeSessionState,
+  nowMs: number,
+): Extract<RuntimeSessionView['page'], { kind: 'page' }> {
+  if (page.nodeId !== 'lobby_area') {
+    return page;
+  }
+
+  const objectState = asRuntimeRecord(asRuntimeRecord(sessionState.objects)?.prototypehub_lobby_jukebox);
+
+  if (!isJukeboxObjectState(objectState) || objectState.focused === true) {
+    return stripPrototypeHubLobbyAtmosphereProse(page);
+  }
+
+  const currentTrackId = typeof objectState.currentTrack === 'string' && objectState.currentTrack !== 'none'
+    ? objectState.currentTrack
+    : undefined;
+  const currentTrackEndsAtMs = typeof objectState.currentTrackEndsAtMs === 'number' && Number.isFinite(objectState.currentTrackEndsAtMs)
+    ? objectState.currentTrackEndsAtMs
+    : undefined;
+  const currentTick = typeof objectState.lobbyAtmosphereTick === 'number' && Number.isFinite(objectState.lobbyAtmosphereTick)
+    ? Math.max(0, Math.floor(objectState.lobbyAtmosphereTick))
+    : 0;
+
+  if (!currentTrackId || typeof currentTrackEndsAtMs !== 'number' || currentTrackEndsAtMs <= nowMs || currentTick <= 0) {
+    return stripPrototypeHubLobbyAtmosphereProse(page);
+  }
+
+  const song = findJukeboxCatalogSongById(currentTrackId);
+
+  if (!song) {
+    return stripPrototypeHubLobbyAtmosphereProse(page);
+  }
+
+  const nextProseBlocks = [
+    ...page.proseBlocks.filter((block) => block.groupId !== 'runtime-jukebox-atmosphere'),
+    {
+      groupId: 'runtime-jukebox-atmosphere',
+      kind: 'paragraph' as const,
+      text: selectJukeboxLobbyAtmosphereText(song, currentTick),
+    },
+  ];
+
+  return {
+    ...page,
+    proseBlocks: nextProseBlocks,
+  };
+}
+
+function stripPrototypeHubLobbyAtmosphereProse(
+  page: Extract<RuntimeSessionView['page'], { kind: 'page' }>,
+): Extract<RuntimeSessionView['page'], { kind: 'page' }> {
+  if (!page.proseBlocks.some((block) => block.groupId === 'runtime-jukebox-atmosphere')) {
+    return page;
+  }
+
+  return {
+    ...page,
+    proseBlocks: page.proseBlocks.filter((block) => block.groupId !== 'runtime-jukebox-atmosphere'),
+  };
+}
+
 function selectFreshStartAction(page: RuntimeSessionView['page']): ProjectedAction | undefined {
   if (!page || page.kind !== 'page') {
     return undefined;
@@ -1241,7 +1875,7 @@ function selectFreshStartAction(page: RuntimeSessionView['page']): ProjectedActi
 }
 
 function formatPersistedSnapshotSummary(
-  snapshot: PersistedRuntimeSessionSnapshot,
+  snapshot: PersistedContinueSessionState,
   projectMetadata: RuntimeSessionProjectMetadata,
 ): string {
   const nodeLabel = projectMetadata.nodes.find((node) => node.id === snapshot.route.nodeId)?.label ?? snapshot.route.nodeId ?? 'Unknown';

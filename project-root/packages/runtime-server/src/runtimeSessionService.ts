@@ -1,6 +1,7 @@
 import {
   appendRecentLog,
   createContentRuntime,
+  getRuntimeClockSnapshotFromSessionState,
   type ContentRuntimeOptions,
   type RuntimeClockSnapshot,
   type RuntimeInteractionOutcome,
@@ -58,6 +59,10 @@ export interface CreateRuntimeSessionOptions {
   pathBeatIndex?: number;
 }
 
+export interface RuntimeSessionServiceOptions extends ContentRuntimeOptions {
+  initialSessionStateByProjectId?: Record<string, RuntimeSessionState>;
+}
+
 export interface RuntimeSessionService {
   createSession(projectId: string, options?: CreateRuntimeSessionOptions): RuntimeSessionView | undefined;
   restoreSession(projectId: string, snapshot: Omit<RuntimeSessionSnapshot, 'sessionId'>): RuntimeSessionView | undefined;
@@ -84,11 +89,19 @@ interface ResolvedNodeEntry {
 
 export function createRuntimeSessionServiceForContentFiles(
   contentFiles: Record<string, string>,
-  options: ContentRuntimeOptions = {},
+  options: RuntimeSessionServiceOptions = {},
 ): RuntimeSessionService {
-  const contentRuntime = createContentRuntime(contentFiles, options);
+  const { initialSessionStateByProjectId, ...runtimeOptions } = options;
+  const contentRuntime = createContentRuntime(contentFiles, runtimeOptions);
   const sessions = new Map<string, MutableRuntimeSession>();
   let nextSessionId = 1;
+
+  function createSeededInitialProjectSessionState(projectId: string): RuntimeSessionState {
+    const persistedState = initialSessionStateByProjectId?.[projectId];
+
+    return contentRuntime.hydrateProjectSessionState(projectId, undefined, persistedState)
+      ?? contentRuntime.createInitialProjectSessionState(projectId);
+  }
 
   const service: RuntimeSessionService = {
     createSession(projectId, sessionOptions = {}) {
@@ -112,7 +125,7 @@ export function createRuntimeSessionServiceForContentFiles(
         pathVisitCounts: {},
         recentLogByNodeId: {},
         actionAttemptsByNodeId: {},
-        sessionState: contentRuntime.createInitialProjectSessionState(projectId),
+        sessionState: createSeededInitialProjectSessionState(projectId),
       };
 
       sessions.set(sessionId, session);
@@ -274,7 +287,7 @@ export function createRuntimeSessionServiceForContentFiles(
       session.pathVisitCounts = {};
       session.recentLogByNodeId = {};
       session.actionAttemptsByNodeId = {};
-      session.sessionState = contentRuntime.createInitialProjectSessionState(session.projectId);
+      session.sessionState = createSeededInitialProjectSessionState(session.projectId);
       session.route = {
         nodeId: undefined,
         pathDirection: undefined,
@@ -329,7 +342,7 @@ export function createRuntimeSessionServiceForContentFiles(
       return buildSessionView(session);
     }
 
-    appendNodeLog(session, nodeId, outcome.logEntry);
+    appendNodeLog(session, nodeId, outcome.logEntry, outcome.replaceNodeLogScope, outcome.clearNodeRecentLog);
 
     if (outcome.sessionState) {
       session.sessionState = outcome.sessionState;
@@ -352,16 +365,19 @@ export function createRuntimeSessionServiceForContentFiles(
 
   function buildSessionView(session: MutableRuntimeSession): RuntimeSessionView {
     const { nodeId, pathDirection, pathBeatIndex } = session.route;
+    const previousSessionState = session.sessionState;
     session.sessionState = contentRuntime.hydrateProjectSessionState(session.projectId, nodeId, session.sessionState) ?? session.sessionState;
     const currentAreaVisitCount = nodeId ? session.areaVisitCounts[nodeId] : undefined;
     const currentPathVisitCount = nodeId ? session.pathVisitCounts[nodeId] : undefined;
+    const basePage = contentRuntime.getProjectedPage(session.projectId, nodeId, pathDirection, {
+      areaVisitCount: currentAreaVisitCount,
+      pathVisitCount: currentPathVisitCount,
+      pathBeatIndex,
+      sessionState: session.sessionState,
+    });
+    appendAutomaticJukeboxQueueAdvanceLog(session, basePage, previousSessionState);
     const page = appendRecentLog(
-      contentRuntime.getProjectedPage(session.projectId, nodeId, pathDirection, {
-        areaVisitCount: currentAreaVisitCount,
-        pathVisitCount: currentPathVisitCount,
-        pathBeatIndex,
-        sessionState: session.sessionState,
-      }),
+      basePage,
       nodeId ? session.recentLogByNodeId[nodeId] : undefined,
     );
     const actorId = getActivePlayerId(session.sessionState);
@@ -572,12 +588,19 @@ function appendNodeLog(
   session: MutableRuntimeSession,
   nodeId: string,
   entry: ProjectedLogEntry | undefined,
+  replaceScope?: string,
+  clearNodeRecentLog?: boolean,
 ): void {
   if (!entry) {
     return;
   }
 
-  session.recentLogByNodeId[nodeId] = [...(session.recentLogByNodeId[nodeId] ?? []), entry];
+  const existingEntries = clearNodeRecentLog ? [] : (session.recentLogByNodeId[nodeId] ?? []);
+  const nextEntries = replaceScope
+    ? existingEntries.filter((existingEntry) => existingEntry.scope !== replaceScope)
+    : existingEntries;
+
+  session.recentLogByNodeId[nodeId] = [...nextEntries, entry];
 }
 
 function cloneSessionSnapshot(session: MutableRuntimeSession): RuntimeSessionSnapshot {
@@ -679,15 +702,16 @@ function normalizeDemo04ResidentConversation(
 export function normalizeSessionStateForPersistedContinue(
   sessionState: RuntimeSessionState,
 ): RuntimeSessionState {
-  const storyState = asRuntimeRecord(sessionState.story);
+  const normalizedState = normalizeSessionStateForPersistedWorldState(sessionState);
+  const storyState = asRuntimeRecord(normalizedState.story);
   const residentStoryState = asRuntimeRecord(storyState?.resident_01);
 
   if (!residentStoryState || residentStoryState.dialog_topic === 'idle') {
-    return sessionState;
+    return normalizedState;
   }
 
   return {
-    ...sessionState,
+    ...normalizedState,
     story: {
       ...storyState,
       resident_01: {
@@ -696,6 +720,284 @@ export function normalizeSessionStateForPersistedContinue(
       },
     },
   };
+}
+
+export function normalizeSessionStateForPersistedWorldState(
+  sessionState: RuntimeSessionState,
+): RuntimeSessionState {
+  const objectsState = asRuntimeRecord(sessionState.objects);
+
+  if (!objectsState) {
+    return sessionState;
+  }
+
+  let changed = false;
+  const nextObjectsState = Object.fromEntries(
+    Object.entries(objectsState).map(([objectId, objectState]) => {
+      const runtimeObjectState = asRuntimeRecord(objectState);
+
+      if (!runtimeObjectState || !Object.prototype.hasOwnProperty.call(runtimeObjectState, 'focused')) {
+        return [objectId, objectState];
+      }
+
+      const { focused: _focused, ...nextObjectState } = runtimeObjectState;
+      changed = true;
+      return [objectId, nextObjectState];
+    }),
+  );
+
+  return changed
+    ? {
+        ...sessionState,
+        objects: nextObjectsState,
+      }
+    : sessionState;
+}
+
+function appendAutomaticJukeboxQueueAdvanceLog(
+  session: MutableRuntimeSession,
+  page: ProjectionResult | undefined,
+  previousSessionState: RuntimeSessionState,
+): void {
+  if (!page || page.kind !== 'page' || !page.nodeId) {
+    return;
+  }
+
+  const currentNowMs = getSessionClockNowMs(session.sessionState);
+
+  if (typeof currentNowMs !== 'number') {
+    return;
+  }
+
+  for (const action of page.actions) {
+    if (action.kind !== 'poi') {
+      continue;
+    }
+
+    const previousJukeboxState = getRuntimeObjectState(previousSessionState, action.id);
+    const nextJukeboxState = getRuntimeObjectState(session.sessionState, action.id);
+    const previousTrackId = getRuntimeStringField(previousJukeboxState, 'currentTrack');
+    const nextTrackId = getRuntimeStringField(nextJukeboxState, 'currentTrack');
+    const previousTrackEndsAtMs = getRuntimeNumberField(previousJukeboxState, 'currentTrackEndsAtMs');
+    const existingQueueLogEntry = findJukeboxQueueLogEntry(session.recentLogByNodeId[page.nodeId]);
+
+    if (!previousTrackId) {
+      continue;
+    }
+
+    if (typeof previousTrackEndsAtMs !== 'number' || previousTrackEndsAtMs > currentNowMs) {
+      continue;
+    }
+
+    if (!nextTrackId) {
+      if (existingQueueLogEntry) {
+        session.recentLogByNodeId[page.nodeId] = [
+          createUpdatedJukeboxQueueLogEntry(existingQueueLogEntry, {
+            queuedTrackCount: getRuntimeStringArrayField(nextJukeboxState, 'queueTrackIds').length,
+          }),
+        ];
+        return;
+      }
+
+      session.recentLogByNodeId[page.nodeId] = [
+        createAutomaticJukeboxQueueFinishedLogEntry(action.label),
+      ];
+      return;
+    }
+
+    if (previousTrackId === nextTrackId) {
+      continue;
+    }
+
+    if (existingQueueLogEntry) {
+      session.recentLogByNodeId[page.nodeId] = [
+        createUpdatedJukeboxQueueLogEntry(existingQueueLogEntry, {
+          trackLabel: getRuntimeStringField(nextJukeboxState, 'currentTrackLabel'),
+          trackMode: getRuntimeStringField(nextJukeboxState, 'currentTrackMode'),
+          currentTrackEndsAtMs: getRuntimeNumberField(nextJukeboxState, 'currentTrackEndsAtMs'),
+          currentNowMs,
+          queuedTrackCount: getRuntimeStringArrayField(nextJukeboxState, 'queueTrackIds').length,
+        }),
+      ];
+      return;
+    }
+
+    session.recentLogByNodeId[page.nodeId] = [
+      createAutomaticJukeboxQueueAdvanceLogEntry(action.label, getRuntimeStringField(nextJukeboxState, 'currentTrackLabel')),
+    ];
+    return;
+  }
+}
+
+function createAutomaticJukeboxQueueAdvanceLogEntry(
+  fixtureLabel: string,
+  trackLabel: string | undefined,
+): ProjectedLogEntry {
+  return {
+    text: `${fixtureLabel.trim().toLowerCase()} clicks over to ${formatPersistedJukeboxTrackLabel(trackLabel)}.`,
+    lane: 'recent',
+  };
+}
+
+function createAutomaticJukeboxQueueFinishedLogEntry(
+  fixtureLabel: string,
+): ProjectedLogEntry {
+  return {
+    text: `${fixtureLabel.trim().toLowerCase()} finishes the last queued song and falls quiet.`,
+    lane: 'recent',
+  };
+}
+
+function findJukeboxQueueLogEntry(
+  entries: ProjectedLogEntry[] | undefined,
+): ProjectedLogEntry | undefined {
+  return [...(entries ?? [])].reverse().find((entry) => isJukeboxQueueLogEntry(entry));
+}
+
+function isJukeboxQueueLogEntry(entry: ProjectedLogEntry | undefined): boolean {
+  return Boolean(entry?.blocks?.some((block) => block.groupId === 'jukebox-queue'));
+}
+
+function createUpdatedJukeboxQueueLogEntry(
+  entry: ProjectedLogEntry,
+  options: {
+    trackLabel?: string;
+    trackMode?: string;
+    currentTrackEndsAtMs?: number;
+    currentNowMs?: number;
+    queuedTrackCount: number;
+  },
+): ProjectedLogEntry {
+  const blocks = entry.blocks ?? [];
+  const selectedBlock = blocks[0] ?? {
+    groupId: 'jukebox-queue',
+    kind: 'paragraph' as const,
+    text: entry.text,
+  };
+  const fakeCreditsBlock = [...blocks].reverse().find((block) => block.text.startsWith('Fake credits ready:')) ?? {
+    groupId: 'jukebox-queue',
+    kind: 'paragraph' as const,
+    text: 'Fake credits ready: $0.00.',
+  };
+  const numberedQueueBlocks = blocks.filter((block) => /^\d+\. /.test(block.text));
+  const remainingQueueBlocks = numberedQueueBlocks
+    .slice(Math.max(0, numberedQueueBlocks.length - options.queuedTrackCount))
+    .map((block, index) => ({
+      ...block,
+      text: block.text.replace(/^\d+\./, `${index + 1}.`),
+    }));
+  const currentTrackTimeLeftSeconds = typeof options.currentTrackEndsAtMs === 'number' && typeof options.currentNowMs === 'number'
+    ? Math.max(0, Math.ceil((options.currentTrackEndsAtMs - options.currentNowMs) / 1000))
+    : undefined;
+  const nextBlocks = [
+    selectedBlock,
+    {
+      groupId: 'jukebox-queue',
+      kind: 'paragraph' as const,
+      text: options.trackLabel
+        ? `Now Playing: ${formatPersistedJukeboxTrackLabel(options.trackLabel)}. ${options.trackMode === 'autoplay' ? 'Mode: motion-sensing autoplay.' : 'Mode: paid selection.'}${typeof currentTrackTimeLeftSeconds === 'number' ? ` Time left: ${formatRuntimeDurationText(currentTrackTimeLeftSeconds)}.` : ''}`
+        : 'Now Playing: nothing yet.',
+    },
+    ...(remainingQueueBlocks.length > 0
+      ? [
+          {
+            groupId: 'jukebox-queue',
+            kind: 'paragraph' as const,
+            text: 'Queue:',
+          },
+          ...remainingQueueBlocks,
+        ]
+      : [
+          {
+            groupId: 'jukebox-queue',
+            kind: 'paragraph' as const,
+            text: 'Queue: empty right now.',
+          },
+        ]),
+    fakeCreditsBlock,
+  ];
+
+  return {
+    ...entry,
+    text: selectedBlock.text,
+    blocks: nextBlocks,
+  };
+}
+
+function formatPersistedJukeboxTrackLabel(trackLabel: string | undefined): string {
+  if (!trackLabel) {
+    return 'the next record';
+  }
+
+  const separator = ' by ';
+  const separatorIndex = trackLabel.indexOf(separator);
+
+  if (separatorIndex === -1) {
+    return `**${trackLabel}**`;
+  }
+
+  const title = trackLabel.slice(0, separatorIndex).trim();
+  const artist = trackLabel.slice(separatorIndex + separator.length).trim();
+
+  return artist.length > 0
+    ? `**${title}** by ${artist}`
+    : `**${title}**`;
+}
+
+function formatRuntimeDurationText(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function getSessionClockNowMs(sessionState: RuntimeSessionState): number | undefined {
+  const nowMs = getRuntimeClockSnapshotFromSessionState(sessionState)?.nowMs;
+
+  return typeof nowMs === 'number' && Number.isFinite(nowMs)
+    ? nowMs
+    : undefined;
+}
+
+function getRuntimeObjectState(
+  sessionState: RuntimeSessionState,
+  objectId: string,
+): Record<string, unknown> | undefined {
+  const objectsState = asRuntimeRecord(sessionState.objects);
+  return asRuntimeRecord(objectsState?.[objectId]);
+}
+
+function getRuntimeStringField(
+  record: Record<string, unknown> | undefined,
+  fieldName: string,
+): string | undefined {
+  const value = record?.[fieldName];
+
+  return typeof value === 'string' && value.length > 0 && value !== 'none'
+    ? value
+    : undefined;
+}
+
+function getRuntimeNumberField(
+  record: Record<string, unknown> | undefined,
+  fieldName: string,
+): number | undefined {
+  const value = record?.[fieldName];
+
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function getRuntimeStringArrayField(
+  record: Record<string, unknown> | undefined,
+  fieldName: string,
+): string[] {
+  const value = record?.[fieldName];
+
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+    : [];
 }
 
 function asRuntimeRecord(value: unknown): Record<string, unknown> | undefined {

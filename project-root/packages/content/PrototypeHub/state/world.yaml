@@ -1,0 +1,17 @@
+objects:
+  prototypehub_lobby_door:
+    open: false
+    openedAtMs: 0
+
+  prototypehub_lobby_jukebox:
+    focused: false
+    browseIndex: 0
+    fakeCredits: 0
+    currentTrack: none
+    currentTrackLabel: ''
+    currentTrackMode: ''
+    currentTrackStartedAtMs: 0
+    currentTrackEndsAtMs: 0
+    lobbyAtmosphereTrackId: ''
+    lobbyAtmosphereTick: 0
+    queueTrackIds: []

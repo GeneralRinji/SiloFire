@@ -1,0 +1,13 @@
+events:
+  explain_prototypehub:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: lobby_area
+      poiId: explain_prototypehub
+
+    lane: recent
+
+    actor:
+      - Prototype Hub exists to test a future jukebox interaction model.
+      - The target shape is same-node focused interaction, where the jukebox takes over the active surface without turning the lobby itself into a different room.

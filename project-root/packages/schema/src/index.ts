@@ -85,6 +85,17 @@ export interface PoiReference extends ContentReferenceBase {}
 
 export interface ChoiceReference extends ContentReferenceBase {}
 
+export type FixtureKind = 'jukebox';
+
+export interface FixtureReference extends ContentReferenceBase {
+  kind: FixtureKind;
+  stateId?: string;
+  catalogId?: string;
+  maxQueueLength?: number;
+  defaultTrackId?: string;
+  defaultTrackLabel?: string;
+}
+
 export interface ExitReference extends ContentReferenceBase {
   targetId: string;
 }
@@ -142,6 +153,7 @@ export interface AreaObject extends BaseContentObject {
   blocking?: AreaBlockingConfig;
   navigationLabels?: AreaNavigationLabels;
   pois?: PoiReference[];
+  fixtures?: FixtureReference[];
   choices?: ChoiceReference[];
   exits?: ExitReference[];
   proseSlots?: ProseSlot[];

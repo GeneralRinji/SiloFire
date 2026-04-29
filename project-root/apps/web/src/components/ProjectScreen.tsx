@@ -3,8 +3,10 @@ import type { ContentProjectRecord } from '../../../../packages/content';
 import type { ProjectedAction, ProjectedControl, ProjectionResult } from '../../../../packages/projection/src';
 import type { SiteAnnouncementRecord } from '../../../../packages/runtime-server/src';
 import { ProjectedPageView } from '../../../../packages/renderer-react/src/components/ProjectedPageView';
+import type { JukeboxPlaybackState } from '../jukeboxPlayback';
 import { PublicHeartPane } from './PublicHeartPane';
 import { ProjectStatePanes } from './ProjectStatePanes';
+import { SidebarJukeboxPlayer } from './SidebarJukeboxPlayer';
 import { SiteAnnouncementStack } from './SiteAnnouncementStack';
 
 const HEART_UI_STORAGE_KEY = 'silofire.publicHearts';
@@ -53,6 +55,9 @@ interface ProjectScreenProps {
     behavior?: string;
   }>;
   sessionObjectStateById?: Record<string, Record<string, string | number | boolean>>;
+  jukeboxPlayback?: JukeboxPlaybackState;
+  jukeboxPlaybackVisible?: boolean;
+  onJukeboxPlaybackEnded?: () => void | Promise<void>;
   onBackHome: () => void;
   onResetRun?: () => void;
   onHeartNode?: (nodeId: string, nextActive: boolean) => Promise<boolean>;
@@ -76,6 +81,9 @@ export function ProjectScreen({
   activeAmbientNpcs,
   sessionNpcStateById,
   sessionObjectStateById,
+  jukeboxPlayback,
+  jukeboxPlaybackVisible = true,
+  onJukeboxPlaybackEnded,
   onBackHome,
   onResetRun,
   onHeartNode,
@@ -139,6 +147,10 @@ export function ProjectScreen({
 
         {siteAnnouncements.length > 0 ? (
           <SiteAnnouncementStack announcements={siteAnnouncements} variant="sidebar" />
+        ) : null}
+
+        {jukeboxPlayback && jukeboxPlaybackVisible ? (
+          <SidebarJukeboxPlayer playback={jukeboxPlayback} visible={jukeboxPlaybackVisible} onPlaybackEnded={onJukeboxPlaybackEnded} />
         ) : null}
 
         {showNodeList ? (

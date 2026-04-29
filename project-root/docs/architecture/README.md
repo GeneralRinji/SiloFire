@@ -24,6 +24,8 @@ Recommended reading order for the current implementation and authoring model:
 
 For forward-looking ideas that are intentionally not hard contract yet, see `PlannedNext.md`.
 
+For a current-state implementation note on the PrototypeHub jukebox fixture and why it is a likely refactor target, see `PrototypeHubJukeboxFixture.md`.
+
 For hosting-specific planning around `silofire.net`, see `DenoDeployPlan.md`.
 
 For the current website heart analytics and admin workflow, see `WebsiteHeartAnalyticsV1.md`.
@@ -209,6 +211,17 @@ Use this when you want:
 - a rough view of likely future systems
 - tentative refactor direction
 - a place to park ideas that are not yet stable enough to be treated as architecture contract
+
+### `PrototypeHubJukeboxFixture.md`
+
+Current-state implementation note for the PrototypeHub jukebox fixture.
+
+Use this when you want:
+
+- the actual behavior split across content, runtime, runtime-server, and dev-server scheduling
+- the seeded state shape and current UX model
+- the main reasons the current implementation is a refactor target
+- a quick reference before changing queue, playback, focus, or atmosphere behavior
 
 ### `DenoDeployPlan.md`
 

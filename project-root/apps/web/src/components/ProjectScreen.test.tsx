@@ -222,3 +222,122 @@ test('ProjectScreen can render dev-only state panes', () => {
   assert.match(html, /field\/on/);
   assert.match(html, /current\/false/);
 });
+
+test('ProjectScreen renders the sidebar jukebox player when active playback is present', () => {
+  const html = renderToStaticMarkup(
+    <ProjectScreen
+      project={{
+        id: 'prototypehub',
+        folderName: 'PrototypeHub',
+        title: 'Prototype Hub',
+        description: 'Fixture test.',
+        owner: 'test',
+        status: 'playable-demo',
+        tools: [],
+        features: [],
+      }}
+      nodes={[{ id: 'lobby_area', label: 'Lobby' }]}
+      selectedNodeId="lobby_area"
+      selectedPage={{
+        kind: 'page',
+        nodeId: 'lobby_area',
+        nodeKind: 'area',
+        title: 'Lobby',
+        proseBlocks: [],
+        recentLog: [],
+        actions: [],
+        controls: [],
+      }}
+      jukeboxPlayback={{
+        objectId: 'prototypehub_lobby_jukebox',
+        trackId: 'song_001',
+        trackLabel: 'Never Gonna Give You Up by Rick Astley',
+        trackMode: 'paid',
+        youtubeUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        videoId: 'dQw4w9WgXcQ',
+        song: {
+          id: 'song_001',
+          title: 'Never Gonna Give You Up',
+          artist: 'Rick Astley',
+          youtubeUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          approxDurationSeconds: 213,
+          approxDurationText: 'about 3.5 minutes',
+          vibe: 'unavoidable',
+          marqueeTexts: [],
+          flavorTexts: [],
+          tags: [],
+        },
+      }}
+      onBackHome={() => {}}
+      onSelectNode={() => {}}
+    />,
+  );
+
+  assert.match(html, /Jukebox Airplay/);
+  assert.match(html, /mute/);
+  assert.match(html, /now\/Never Gonna Give You Up - Rick Astley/);
+  assert.match(html, /source\/youtube \| mode\/paid/);
+});
+
+test('ProjectScreen does not render the sidebar jukebox player when playback is hidden', () => {
+  const html = renderToStaticMarkup(
+    <ProjectScreen
+      project={{
+        id: 'demo',
+        folderName: 'demo',
+        title: 'Demo Project',
+        description: 'Renderer smoke test.',
+        owner: 'test',
+        status: 'playable-demo',
+        tools: [],
+        features: [],
+      }}
+      nodes={[{ id: 'title_screen', label: 'Title' }]}
+      selectedNodeId="title_screen"
+      selectedPage={{
+        kind: 'page',
+        nodeId: 'title_screen',
+        nodeKind: 'area',
+        title: 'Title Screen',
+        proseBlocks: [
+          {
+            kind: 'paragraph',
+            text: 'Pick a run.',
+          },
+        ],
+        recentLog: [],
+        actions: [],
+        controls: [],
+      }}
+      jukeboxPlayback={{
+        objectId: 'prototypehub_lobby_jukebox',
+        trackId: 'song_003',
+        trackLabel: 'Never Gonna Give You Up by Rick Astley',
+        trackMode: 'paid',
+        youtubeUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        videoId: 'dQw4w9WgXcQ',
+        song: {
+          id: 'song_003',
+          title: 'Never Gonna Give You Up',
+          artist: 'Rick Astley',
+          youtubeUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          durationMs: 212000,
+          vibe: 'euphoric',
+          marqueeTexts: [],
+          flavorTexts: [],
+          tags: [],
+        },
+      }}
+      jukeboxPlaybackVisible={false}
+      onBackHome={() => {}}
+      onResetRun={() => {}}
+      onHeartNode={async () => true}
+      onSelectNode={() => {}}
+      onAction={() => {}}
+      onControl={() => {}}
+    />,
+  );
+
+  assert.doesNotMatch(html, /Jukebox Airplay/);
+  assert.doesNotMatch(html, /Never Gonna Give You Up/);
+});

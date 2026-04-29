@@ -13,6 +13,7 @@ import {
   asChoiceReferences,
   asControlLabels,
   asExitReferences,
+  asFixtureReferences,
   asOptionalBoolean,
   asOptionalPresentationMode,
   asOptionalString,
@@ -82,6 +83,7 @@ export function normalizeParsedAreaCandidate(candidate: ParsedAreaCandidate): No
   const controlLabels = asControlLabels(frontMatter.controlLabels, warnings);
   const titleScreen = asTitleScreenConfig(frontMatter.titleScreen, warnings);
   const pois = asPoiReferences(frontMatter.pois, warnings);
+  const fixtures = asFixtureReferences(frontMatter.fixtures, warnings);
   const choices = asChoiceReferences(frontMatter.choices, warnings);
   const exits = asExitReferences(frontMatter.exits, warnings);
 
@@ -111,6 +113,7 @@ export function normalizeParsedAreaCandidate(candidate: ParsedAreaCandidate): No
           titleScreen,
           navigationLabels,
           pois,
+          fixtures,
           choices,
           exits,
           proseSlots: proseSlots.length > 0 ? proseSlots : undefined,

@@ -4,6 +4,8 @@ import type {
   ChoiceReference,
   ControlLabels,
   ExitReference,
+  FixtureKind,
+  FixtureReference,
   FlowBeatMarker,
   GatePresentationConfig,
   GatePresentationMode,
@@ -74,6 +76,7 @@ const PATH_TRAVERSAL_MODE_SET: ReadonlySet<PathTraversalMode> = new Set([
 ]);
 
 const PATH_BLOCKING_STATE_SET: ReadonlySet<PathBlockingState> = new Set(['open', 'blocked']);
+const FIXTURE_KIND_SET: ReadonlySet<FixtureKind> = new Set(['jukebox']);
 const GATE_PRESENTATION_MODE_SET: ReadonlySet<GatePresentationMode> = new Set([
   'passthrough',
   'walkpassthrough',
@@ -1278,6 +1281,59 @@ export function asChoiceReferences(
   warnings: ParseWarning[],
 ): ChoiceReference[] | undefined {
   return asReferenceArray(value, false, warnings) as ChoiceReference[] | undefined;
+}
+
+export function asFixtureReferences(
+  value: ParsedFrontMatterValue | undefined,
+  warnings: ParseWarning[],
+): FixtureReference[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const normalized: FixtureReference[] = [];
+
+  for (const entry of value) {
+    const objectValue = asObject(entry);
+
+    if (!objectValue) {
+      warnings.push({ message: 'Skipping non-object fixture entry.' });
+      continue;
+    }
+
+    const id = asOptionalString(objectValue.id);
+    const displayName = asOptionalString(objectValue.displayName);
+    const kind = asOptionalString(objectValue.kind);
+    const key = asOptionalShortcutKey(objectValue.key);
+
+    if (!id || !displayName || !kind) {
+      warnings.push({ message: 'Skipping fixture entry missing id, displayName, or kind.' });
+      continue;
+    }
+
+    if (!FIXTURE_KIND_SET.has(kind as FixtureKind)) {
+      warnings.push({ message: `Skipping fixture ${id} with unsupported kind ${kind}.` });
+      continue;
+    }
+
+    normalized.push({
+      id,
+      displayName,
+      kind: kind as FixtureKind,
+      key,
+      stateId: asOptionalString(objectValue.stateId),
+      catalogId: asOptionalString(objectValue.catalogId),
+      maxQueueLength: typeof objectValue.maxQueueLength === 'number'
+        && Number.isFinite(objectValue.maxQueueLength)
+        && objectValue.maxQueueLength > 0
+        ? Math.floor(objectValue.maxQueueLength)
+        : undefined,
+      defaultTrackId: asOptionalString(objectValue.defaultTrackId),
+      defaultTrackLabel: asOptionalString(objectValue.defaultTrackLabel),
+    });
+  }
+
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function asExitReferences(

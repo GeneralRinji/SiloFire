@@ -106,6 +106,23 @@ export const CONTENT_PROJECT_METADATA_BY_ID: Record<string, ContentProjectMetada
       active: true,
     },
   },
+  PrototypeHub: {
+    title: 'Prototype Hub',
+    description: 'A tiny threshold-and-lobby prototype for testing future fixtures and interaction flows.',
+    folderName: 'PrototypeHub',
+    owner: 'Ashley',
+    tools: ['TypeScript', 'React', 'AI-assisted authoring', 'Stateful runtime'],
+    features: ['Title screen', 'Stateful lobby door', 'Clocked ambient prose', 'Recent-log prototype note', 'Node-attached jukebox fixture'],
+    publishedDate: '2026-04-26',
+    releaseStatus: 'prototype',
+    version: '0.1.0',
+    genre: 'Interaction prototype',
+    rating: 'All ages',
+    contentWarnings: [],
+    availability: {
+      active: true,
+    },
+  },
 };
 
 export function isContentProjectAvailable(projectId: string, now = new Date()): boolean {

@@ -1,0 +1,88 @@
+events:
+  inspect_outside_window_glow:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: outside_area
+      poiId: window_glow
+
+    actor:
+      - The sign keeps trying to settle on a steady hum and never quite succeeds.
+      - Its buzz turns the whole window into something between an invitation and a warning.
+
+  enter_prototypehub_door_when_closed:
+    trigger:
+      kind: enter
+      actor: player
+      nodeId: outside_lobbygate
+
+    when:
+      predicate: prototypehub_lobby_door_closed
+
+    actor:
+      - The door is shut right now.
+
+  enter_prototypehub_door_when_open:
+    trigger:
+      kind: enter
+      actor: player
+      nodeId: outside_lobbygate
+
+    when:
+      predicate: prototypehub_lobby_door_open
+
+    actor:
+      - The door is standing open right now.
+
+  inspect_prototypehub_business_hours:
+    trigger:
+      kind: poi
+      actor: player
+      nodeId: outside_lobbygate
+      poiId: business_hours
+
+    actor:
+      - Open always. Closed never.
+
+  open_prototypehub_door:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: outside_lobbygate
+      choiceId: open_prototypehub_door
+
+    when:
+      predicate: prototypehub_lobby_door_closed
+
+    offer:
+      label: Open The Door
+      key: O
+
+    actor:
+      - You pull the door open. The conversation inside sharpens for a second, then blurs back into room tone.
+
+    effects:
+      - set: [objects.prototypehub_lobby_door.open, true]
+      - set: [objects.prototypehub_lobby_door.openedAtMs, world.time.nowMs]
+
+  enter_prototypehub_lobby:
+    trigger:
+      kind: choice
+      actor: player
+      nodeId: outside_lobbygate
+      choiceId: enter_prototypehub_lobby
+
+    when:
+      predicate: prototypehub_lobby_door_open
+
+    offer:
+      label: Go Inside
+      key: G
+
+    lane: recent
+
+    actor:
+      - The little bell over the door gives a bright quick jingle as you step through.
+
+    effects:
+      - navigate: [lobby_area]

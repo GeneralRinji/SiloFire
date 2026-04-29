@@ -1,0 +1,6 @@
+predicates:
+  prototypehub_lobby_door_open:
+    equals: [objects.prototypehub_lobby_door.open, true]
+
+  prototypehub_lobby_door_closed:
+    equals: [objects.prototypehub_lobby_door.open, false]

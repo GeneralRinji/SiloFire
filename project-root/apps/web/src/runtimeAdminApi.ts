@@ -27,6 +27,12 @@ export async function resetRuntimeAdminHeartProject(projectId: string, password:
   });
 }
 
+export async function resetRuntimeAdminJukeboxProject(projectId: string, password: string): Promise<RuntimeAdminApiResult<{ ok: boolean }>> {
+  return fetchAdminJson<{ ok: boolean }>(`/api/runtime-admin/jukeboxes/${encodeURIComponent(projectId)}/reset`, password, {
+    method: 'POST',
+  });
+}
+
 export async function listRuntimeAdminSiteAnnouncements(password: string): Promise<RuntimeAdminApiResult<AdminSiteAnnouncementSnapshot>> {
   return fetchAdminJson<AdminSiteAnnouncementSnapshot>('/api/runtime-admin/site-announcements', password);
 }

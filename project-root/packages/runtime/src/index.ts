@@ -1,10 +1,11 @@
 import { parseAreaToSchema, parseEventSidecar, parseGateToSchema, parseNpcPredicateDefinitions, parseNpcSidecar, parsePathToSchema, parsePredicateSidecar, parseStateSidecar, parseTimeSettingsSidecar, parseWeatherSettingsSidecar } from '../../parser/src';
 import { interpretAreaNode, interpretGateNode, interpretPathNode } from '../../interpreter/src';
 import type { ParsedFrontMatterObject, ParsedFrontMatterValue } from '../../parser/src';
-import type { AreaObject, ContentEventDefinition, ContentNpcDefinition, EventEffectDefinition, FlowBeatMarker, GateObject, PathDirection, PathObject, ProjectTimeSettingsDefinition, ProjectWeatherSettingsDefinition, ProseSlot, ProseTextBlock, ProseTrigger, ProseVariant, TimeScheduleDefinition, TimeScheduleTriggerDefinition, TitleScreenConfig } from '../../schema/src';
+import type { AreaObject, ContentEventDefinition, ContentNpcDefinition, EventEffectDefinition, FixtureReference, FlowBeatMarker, GateObject, PathDirection, PathObject, ProjectTimeSettingsDefinition, ProjectWeatherSettingsDefinition, ProseSlot, ProseTextBlock, ProseTrigger, ProseVariant, TimeScheduleDefinition, TimeScheduleTriggerDefinition, TitleScreenConfig } from '../../schema/src';
 import { projectAreaNode, projectGateNode, projectPathNode, type ProjectionResult } from '../../projection/src';
 import type { ProjectedAction, ProjectedControl, ProjectedLogEntry, ProjectedProseBlock, ProjectedTextLane } from '../../projection/src';
 import type { ContentObject } from '../../schema/src';
+import { JUKEBOX_CATALOGS, type JukeboxCatalogSong } from './jukeboxCatalogs';
 import { resolveAssignedProjectCalendar } from './runtimeClock';
 import type { RuntimeWeatherSnapshot } from './runtimeWeatherTypes';
 
@@ -81,9 +82,15 @@ export interface RuntimeInteractionOutcome {
   nextPathBeatIndex?: number;
   resetNodeId?: string;
   logEntry?: ProjectedLogEntry;
+  clearNodeRecentLog?: boolean;
+  replaceNodeLogScope?: string;
   sessionState?: RuntimeSessionState;
   eventResult?: RuntimeResolvedEventResult;
 }
+
+const JUKEBOX_AUTOPLAY_TRACK_ID = 'song_001';
+const JUKEBOX_DEFAULT_TRACK_PRICE_DOLLARS = 1;
+const JUKEBOX_DEFAULT_MAX_QUEUE_LENGTH = 20;
 
 export interface ActionResolutionOptions {
   attempt?: number;
@@ -178,19 +185,54 @@ export function createContentRuntime(
       return {};
     }
 
+    const currentSessionState = hydrateRuntimeSessionState(
+      project,
+      options.sessionState,
+      nodeId,
+      options.systemContext,
+      runtimeOptions.clockSource,
+      runtimeOptions.weatherSource,
+    );
+    const currentSystemContext = resolveRuntimeSystemContext(
+      projectId,
+      project,
+      nodeId,
+      currentSessionState,
+      options.systemContext,
+      runtimeOptions.clockSource,
+      runtimeOptions.weatherSource,
+    );
+    const resolvedOptions: ActionResolutionOptions = {
+      ...options,
+      sessionState: currentSessionState,
+      systemContext: currentSystemContext,
+    };
+
     if (nodeRecord.node.templateSchema === 'area') {
       if (action.kind === 'poi') {
-        const eventOutcome = resolveSidecarActionEvent(projectId, project, nodeId, action, options, runtimeOptions.clockSource);
+        const eventOutcome = resolveSidecarActionEvent(projectId, project, nodeId, action, resolvedOptions, runtimeOptions.clockSource);
 
         if (eventOutcome) {
           return eventOutcome;
+        }
+
+        const fixtureOutcome = resolveAreaFixturePoiAction(nodeRecord.node, action, currentSessionState, currentSystemContext);
+
+        if (fixtureOutcome) {
+          return fixtureOutcome;
         }
 
         return createLogOutcome(resolveProseSlotEntry(nodeRecord.node, 'poi_inspect', action.id, options.attempt), 'recent');
       }
 
       if (action.kind === 'choice') {
-        const eventOutcome = resolveSidecarActionEvent(projectId, project, nodeId, action, options, runtimeOptions.clockSource);
+        const fixtureOutcome = resolveAreaFixtureChoiceAction(nodeRecord.node, action, currentSessionState, currentSystemContext);
+
+        if (fixtureOutcome) {
+          return fixtureOutcome;
+        }
+
+        const eventOutcome = resolveSidecarActionEvent(projectId, project, nodeId, action, resolvedOptions, runtimeOptions.clockSource);
 
         if (eventOutcome) {
           return eventOutcome;
@@ -413,7 +455,10 @@ export function createContentRuntime(
       return [];
     }
 
-    return resolveSidecarOfferedActions(projectId, project, nodeId, options, runtimeOptions.clockSource, runtimeOptions.weatherSource);
+    return [
+      ...resolveAreaFixtureOfferedActions(project.nodeRecordsById[nodeId]?.node, options.sessionState),
+      ...resolveSidecarOfferedActions(projectId, project, nodeId, options, runtimeOptions.clockSource, runtimeOptions.weatherSource),
+    ];
   }
 
   function hydrateProjectSessionState(
@@ -989,7 +1034,38 @@ function hydrateRuntimeSessionState(
   };
   const runtimeSystemContext = resolveBaseRuntimeSystemContext(project.projectId, project, nodeId, mergedState, systemContext, clockSource, weatherSource);
   const synchronizedState = syncRuntimeSystemContext(mergedState, runtimeSystemContext);
-  return applyRuntimeSchedules(project, synchronizedState, runtimeSystemContext, nodeId, previousSystemContext);
+  const scheduledState = applyRuntimeSchedules(project, synchronizedState, runtimeSystemContext, nodeId, previousSystemContext);
+  return reconcileRuntimeFixtures(project, scheduledState, runtimeSystemContext);
+}
+
+function reconcileRuntimeFixtures(
+  project: RuntimeProjectRecord,
+  sessionState: RuntimeSessionState,
+  systemContext: RuntimeSystemContext,
+): RuntimeSessionState {
+  const nowMs = systemContext.clock?.nowMs;
+
+  if (typeof nowMs !== 'number') {
+    return sessionState;
+  }
+
+  let nextSessionState = sessionState;
+
+  Object.values(project.nodeRecordsById).forEach((nodeRecord) => {
+    if (nodeRecord.node.templateSchema !== 'area') {
+      return;
+    }
+
+    (nodeRecord.node.fixtures ?? []).forEach((fixture) => {
+      if (fixture.kind !== 'jukebox') {
+        return;
+      }
+
+      nextSessionState = reconcileJukeboxPlayback(nextSessionState, fixture, nowMs);
+    });
+  });
+
+  return nextSessionState;
 }
 
 function resolveSidecarActionEvent(
@@ -3115,4 +3191,706 @@ function isGatePassthrough(node: GateObject, direction?: PathDirection): boolean
     presentationMode === 'walkpassthrough' ||
     presentationMode === 'runpassthrough'
   );
+}
+
+function resolveAreaFixtureOfferedActions(
+  node: ContentObject | undefined,
+  sessionState: RuntimeSessionState | undefined,
+): ProjectedAction[] {
+  if (!node || node.templateSchema !== 'area' || !sessionState) {
+    return [];
+  }
+
+  return (node.fixtures ?? []).flatMap((fixture) => resolveFixtureOfferedActions(fixture, sessionState));
+}
+
+function resolveFixtureOfferedActions(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+): ProjectedAction[] {
+  if (fixture.kind !== 'jukebox' || !isFixtureFocused(fixture, sessionState)) {
+    return [];
+  }
+
+  const fakeCredits = getJukeboxFakeCreditCount(fixture, sessionState);
+  const selectedSong = getJukeboxPreviewSong(fixture, sessionState);
+  const selectedSongPriceDollars = getJukeboxSongPriceDollars(selectedSong);
+  const actions: ProjectedAction[] = [];
+
+  actions.push({
+    id: createFixtureActionId(fixture.id, 'swipe_left'),
+    kind: 'choice',
+    label: '<< Swipe Left',
+    key: 'A',
+    keyLabel: '[A]',
+  });
+
+  actions.push({
+    id: createFixtureActionId(fixture.id, 'swipe_right'),
+    kind: 'choice',
+    label: 'Swipe Right >>',
+    key: 'D',
+    keyLabel: '[D]',
+  });
+
+  actions.push({
+    id: createFixtureActionId(fixture.id, 'queue_song'),
+    kind: 'choice',
+    label: `Queue Selected Song (${formatJukeboxPriceText(selectedSongPriceDollars)})`,
+    key: 'Q',
+    keyLabel: '[Q]',
+  });
+
+  actions.push({
+    id: createFixtureActionId(fixture.id, 'view_queue'),
+    kind: 'choice',
+    label: 'View Current Queue',
+    key: 'V',
+    keyLabel: '[V]',
+  });
+
+  actions.push({
+    id: createFixtureActionId(fixture.id, 'add_fake_money'),
+    kind: 'choice',
+    label: fakeCredits > 0
+      ? `Put In Fake Money (+${formatJukeboxPriceText(JUKEBOX_DEFAULT_TRACK_PRICE_DOLLARS)} | ${formatJukeboxPriceText(fakeCredits)} Ready)`
+      : `Put In Fake Money (+${formatJukeboxPriceText(JUKEBOX_DEFAULT_TRACK_PRICE_DOLLARS)})`,
+    key: 'F',
+    keyLabel: '[F]',
+  });
+
+  actions.push({
+    id: createFixtureActionId(fixture.id, 'step_away'),
+    kind: 'choice',
+    label: 'Step Away From Jukebox',
+    key: 'W',
+    keyLabel: '[W]',
+  });
+
+  return actions;
+}
+
+function resolveAreaFixturePoiAction(
+  node: AreaObject,
+  action: ProjectedAction,
+  sessionState: RuntimeSessionState | undefined,
+  systemContext?: RuntimeSystemContext,
+): RuntimeInteractionOutcome | undefined {
+  const fixture = node.fixtures?.find((entry) => entry.id === action.id);
+
+  if (!fixture || fixture.kind !== 'jukebox') {
+    return undefined;
+  }
+
+  const currentState = sessionState ?? {};
+  const currentTrackText = getJukeboxCurrentTrackText(fixture, currentState) ?? getJukeboxCurrentTrackLabel(fixture, currentState);
+  const nextState = setJukeboxBrowseIndex(setFixtureFocused(currentState, fixture, true), fixture, getJukeboxBrowseIndex(fixture, currentState));
+
+  if (!currentTrackText) {
+    const autoplaySong = getJukeboxAutoplaySong(fixture);
+
+    if (autoplaySong) {
+      const startedPlaybackState = setJukeboxTrack(
+        nextState,
+        fixture,
+        autoplaySong,
+        resolveRuntimeSystemNowMs(systemContext),
+        'autoplay',
+      );
+
+      return {
+        logEntry: createLogEntry(
+          `The ${fixture.displayName.toLowerCase()} catches the motion near its controls and wakes itself with ${formatJukeboxSongText(autoplaySong)}.`,
+          undefined,
+          undefined,
+          'recent',
+        ),
+        sessionState: startedPlaybackState,
+      };
+    }
+  }
+
+  const text = currentTrackText
+    ? `${fixture.displayName} is already spinning ${currentTrackText}.`
+    : `${fixture.displayName} waits in patient silence, all chrome, glow, and promise.`;
+
+  return {
+    logEntry: createLogEntry(text, undefined, undefined, 'recent'),
+    sessionState: nextState,
+  };
+}
+
+function resolveAreaFixtureChoiceAction(
+  node: AreaObject,
+  action: ProjectedAction,
+  sessionState: RuntimeSessionState | undefined,
+  systemContext?: RuntimeSystemContext,
+): RuntimeInteractionOutcome | undefined {
+  const parsedAction = parseFixtureActionId(action.id);
+
+  if (!parsedAction) {
+    return undefined;
+  }
+
+  const fixture = node.fixtures?.find((entry) => entry.id === parsedAction.fixtureId);
+
+  if (!fixture || fixture.kind !== 'jukebox') {
+    return undefined;
+  }
+
+  const currentState = sessionState ?? {};
+
+  if (parsedAction.command === 'swipe_left' || parsedAction.command === 'swipe_right') {
+    const songCount = getJukeboxCatalogSongs(fixture).length;
+
+    if (songCount === 0) {
+      return undefined;
+    }
+
+    const currentIndex = getJukeboxBrowseIndex(fixture, currentState);
+    const direction = parsedAction.command === 'swipe_left' ? -1 : 1;
+    const nextIndex = ((currentIndex + direction) % songCount + songCount) % songCount;
+    const nextState = setJukeboxBrowseIndex(setFixtureFocused(currentState, fixture, true), fixture, nextIndex);
+    const previewEntry = createJukeboxPreviewLogEntry(fixture, nextState);
+
+    return {
+      logEntry: previewEntry,
+      clearNodeRecentLog: true,
+      sessionState: nextState,
+    };
+  }
+
+  if (parsedAction.command === 'view_queue') {
+    return {
+      logEntry: createJukeboxQueueLogEntry(fixture, setFixtureFocused(currentState, fixture, true)),
+      clearNodeRecentLog: true,
+      sessionState: setFixtureFocused(currentState, fixture, true),
+    };
+  }
+
+  if (parsedAction.command === 'add_fake_money') {
+    if (isJukeboxQueueFull(
+      fixture,
+      currentState,
+      getJukeboxCurrentTrackId(fixture, currentState),
+      getJukeboxTrackMode(fixture, currentState),
+    )) {
+      return {
+        logEntry: createLogEntry(
+          `The ${fixture.displayName.toLowerCase()} queue is full at ${getJukeboxMaxQueueLength(fixture)} songs, so it refuses more fake money until something plays.`,
+          undefined,
+          undefined,
+          'recent',
+        ),
+        sessionState: setFixtureFocused(currentState, fixture, true),
+      };
+    }
+
+    const nextCreditCount = getJukeboxFakeCreditCount(fixture, currentState) + 1;
+    const nextState = setJukeboxFakeCreditCount(setFixtureFocused(currentState, fixture, true), fixture, nextCreditCount);
+
+    return {
+      logEntry: createLogEntry(
+        nextCreditCount === 1
+          ? `You feed the jukebox one fake dollar. Credit ready: ${formatJukeboxPriceText(nextCreditCount)}.`
+          : `You feed the jukebox another fake dollar. Credit ready: ${formatJukeboxPriceText(nextCreditCount)}.`,
+        undefined,
+        undefined,
+        'recent',
+      ),
+      sessionState: nextState,
+    };
+  }
+
+  if (parsedAction.command === 'queue_song') {
+    const previewSong = getJukeboxPreviewSong(fixture, currentState);
+
+    if (!previewSong) {
+      return {
+        logEntry: createLogEntry(`The ${fixture.displayName.toLowerCase()} has nothing selected to queue yet.`, undefined, undefined, 'recent'),
+        sessionState: setFixtureFocused(currentState, fixture, true),
+      };
+    }
+
+    const fakeCredits = getJukeboxFakeCreditCount(fixture, currentState);
+    const songPriceDollars = getJukeboxSongPriceDollars(previewSong);
+
+    if (fakeCredits < songPriceDollars) {
+      return {
+        logEntry: createLogEntry(`The ${fixture.displayName.toLowerCase()} wants ${formatJukeboxPriceText(songPriceDollars)} in fake money before it will queue ${formatJukeboxSongText(previewSong)}.`, undefined, undefined, 'recent'),
+        sessionState: setFixtureFocused(currentState, fixture, true),
+      };
+    }
+
+    const currentTrack = getJukeboxCurrentTrackId(fixture, currentState);
+    const currentTrackMode = getJukeboxTrackMode(fixture, currentState);
+
+    if (isJukeboxQueueFull(fixture, currentState, currentTrack, currentTrackMode)) {
+      return {
+        logEntry: createLogEntry(
+          `The ${fixture.displayName.toLowerCase()} queue is full at ${getJukeboxMaxQueueLength(fixture)} songs. Wait for something to play before adding another selection.`,
+          undefined,
+          undefined,
+          'recent',
+        ),
+        sessionState: setFixtureFocused(currentState, fixture, true),
+      };
+    }
+
+    let nextState = setJukeboxFakeCreditCount(setFixtureFocused(currentState, fixture, true), fixture, fakeCredits - songPriceDollars);
+    const nowMs = resolveRuntimeSystemNowMs(systemContext);
+
+    if (currentTrack && currentTrackMode !== 'autoplay') {
+      const nextQueueTrackIds = [...getJukeboxQueuedTrackIds(fixture, currentState), previewSong.id];
+      nextState = setJukeboxQueuedTrackIds(nextState, fixture, nextQueueTrackIds);
+
+      return {
+        logEntry: createLogEntry(`The ${fixture.displayName.toLowerCase()} accepts ${formatJukeboxPriceText(songPriceDollars)} and adds ${formatJukeboxSongText(previewSong)} to the queue.`, undefined, undefined, 'recent'),
+        sessionState: nextState,
+      };
+    }
+
+    nextState = setJukeboxTrack(nextState, fixture, previewSong, nowMs, 'paid');
+
+    return {
+      logEntry: createLogEntry(
+        currentTrackMode === 'autoplay'
+          ? `The ${fixture.displayName.toLowerCase()} drops its motion-sensing fallback and switches to ${formatJukeboxSongText(previewSong)}.`
+          : `The ${fixture.displayName.toLowerCase()} accepts ${formatJukeboxPriceText(songPriceDollars)} and starts ${formatJukeboxSongText(previewSong)}.`,
+        undefined,
+        undefined,
+        'recent',
+      ),
+      sessionState: nextState,
+    };
+  }
+
+  const nextState = setFixtureFocused(currentState, fixture, false);
+
+  return {
+    logEntry: createLogEntry(
+      getJukeboxCurrentTrackId(fixture, currentState)
+        ? `You step back from the ${fixture.displayName.toLowerCase()} and let it keep working the room.`
+        : `You step back from the ${fixture.displayName.toLowerCase()} without leaving the lobby.`,
+      undefined,
+      undefined,
+      'recent',
+    ),
+    sessionState: nextState,
+  };
+}
+
+function createFixtureActionId(
+  fixtureId: string,
+  command: 'step_away' | 'swipe_left' | 'swipe_right' | 'view_queue' | 'add_fake_money' | 'queue_song',
+): string {
+  return `fixture:${fixtureId}:${command}`;
+}
+
+function parseFixtureActionId(
+  actionId: string,
+): { fixtureId: string; command: 'step_away' | 'swipe_left' | 'swipe_right' | 'view_queue' | 'add_fake_money' | 'queue_song' } | undefined {
+  const match = /^fixture:(.+):(step_away|swipe_left|swipe_right|view_queue|add_fake_money|queue_song)$/.exec(actionId);
+
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    fixtureId: match[1],
+    command: match[2] as 'step_away' | 'swipe_left' | 'swipe_right' | 'view_queue' | 'add_fake_money' | 'queue_song',
+  };
+}
+
+function getFixtureStateId(fixture: FixtureReference): string {
+  return fixture.stateId ?? fixture.id;
+}
+
+function isFixtureFocused(fixture: FixtureReference, sessionState: RuntimeSessionState): boolean {
+  return getRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.focused`) === true;
+}
+
+function getJukeboxCurrentTrackId(fixture: FixtureReference, sessionState: RuntimeSessionState): string | undefined {
+  const value = getRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.currentTrack`);
+
+  return typeof value === 'string' && value.length > 0 && value !== 'none'
+    ? value
+    : undefined;
+}
+
+function getJukeboxCurrentTrackLabel(fixture: FixtureReference, sessionState: RuntimeSessionState): string | undefined {
+  const value = getRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.currentTrackLabel`);
+
+  return typeof value === 'string' && value.length > 0
+    ? value
+    : undefined;
+}
+
+function setFixtureFocused(
+  sessionState: RuntimeSessionState,
+  fixture: FixtureReference,
+  focused: boolean,
+): RuntimeSessionState {
+  return setRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.focused`, focused);
+}
+
+function setJukeboxTrack(
+  sessionState: RuntimeSessionState,
+  fixture: FixtureReference,
+  song: JukeboxCatalogSong,
+  startedAtMs: number,
+  trackMode: 'autoplay' | 'paid',
+): RuntimeSessionState {
+  let nextState = sessionState;
+  nextState = setRuntimeSessionValue(nextState, `objects.${getFixtureStateId(fixture)}.currentTrack`, song.id);
+  nextState = setRuntimeSessionValue(nextState, `objects.${getFixtureStateId(fixture)}.currentTrackLabel`, createJukeboxSongLabel(song));
+  nextState = setRuntimeSessionValue(nextState, `objects.${getFixtureStateId(fixture)}.currentTrackMode`, trackMode);
+  nextState = setRuntimeSessionValue(nextState, `objects.${getFixtureStateId(fixture)}.currentTrackStartedAtMs`, startedAtMs);
+  nextState = setRuntimeSessionValue(nextState, `objects.${getFixtureStateId(fixture)}.currentTrackEndsAtMs`, startedAtMs + song.approxDurationSeconds * 1000);
+  return nextState;
+}
+
+function clearJukeboxTrack(
+  sessionState: RuntimeSessionState,
+  fixture: FixtureReference,
+): RuntimeSessionState {
+  let nextState = sessionState;
+  nextState = setRuntimeSessionValue(nextState, `objects.${getFixtureStateId(fixture)}.currentTrack`, 'none');
+  nextState = setRuntimeSessionValue(nextState, `objects.${getFixtureStateId(fixture)}.currentTrackLabel`, '');
+  nextState = setRuntimeSessionValue(nextState, `objects.${getFixtureStateId(fixture)}.currentTrackMode`, '');
+  nextState = setRuntimeSessionValue(nextState, `objects.${getFixtureStateId(fixture)}.currentTrackStartedAtMs`, 0);
+  nextState = setRuntimeSessionValue(nextState, `objects.${getFixtureStateId(fixture)}.currentTrackEndsAtMs`, 0);
+  return nextState;
+}
+
+function createJukeboxSongLabel(song: JukeboxCatalogSong): string {
+  return `${song.title} by ${song.artist}`;
+}
+
+function getJukeboxSongPriceDollars(song: JukeboxCatalogSong | undefined): number {
+  return song ? JUKEBOX_DEFAULT_TRACK_PRICE_DOLLARS : JUKEBOX_DEFAULT_TRACK_PRICE_DOLLARS;
+}
+
+function formatJukeboxPriceText(priceDollars: number): string {
+  return `$${priceDollars.toFixed(2)}`;
+}
+
+function formatJukeboxDurationText(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function resolveRuntimeSystemNowMs(systemContext: RuntimeSystemContext | undefined): number {
+  return typeof systemContext?.clock?.nowMs === 'number'
+    ? systemContext.clock.nowMs
+    : Date.now();
+}
+
+function formatJukeboxSongText(song: JukeboxCatalogSong): string {
+  return `**${song.title}** by ${song.artist}`;
+}
+
+function getJukeboxCatalogSongById(
+  fixture: FixtureReference,
+  songId: string,
+): JukeboxCatalogSong | undefined {
+  return getJukeboxCatalogSongs(fixture).find((song) => song.id === songId);
+}
+
+function getJukeboxCurrentTrackText(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+): string | undefined {
+  const currentTrack = getJukeboxCurrentTrackId(fixture, sessionState);
+
+  if (currentTrack) {
+    const song = getJukeboxCatalogSongById(fixture, currentTrack);
+
+    if (song) {
+      return formatJukeboxSongText(song);
+    }
+  }
+
+  const currentTrackLabel = getJukeboxCurrentTrackLabel(fixture, sessionState);
+  return currentTrackLabel ? `**${currentTrackLabel}**` : undefined;
+}
+
+function getJukeboxTrackMode(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+): 'autoplay' | 'paid' | undefined {
+  const value = getRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.currentTrackMode`);
+  return value === 'autoplay' || value === 'paid' ? value : undefined;
+}
+
+function getJukeboxTrackStartedAtMs(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+): number | undefined {
+  const value = getRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.currentTrackStartedAtMs`);
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function getJukeboxTrackEndsAtMs(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+): number | undefined {
+  const value = getRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.currentTrackEndsAtMs`);
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function getJukeboxAutoplaySong(fixture: FixtureReference): JukeboxCatalogSong | undefined {
+  return getJukeboxCatalogSongById(fixture, JUKEBOX_AUTOPLAY_TRACK_ID)
+    ?? getJukeboxCatalogSongs(fixture)[0];
+}
+
+function reconcileJukeboxPlayback(
+  sessionState: RuntimeSessionState,
+  fixture: FixtureReference,
+  nowMs: number,
+): RuntimeSessionState {
+  let nextSessionState = sessionState;
+  let currentTrackId = getJukeboxCurrentTrackId(fixture, nextSessionState);
+  let currentTrackEndsAtMs = getJukeboxTrackEndsAtMs(fixture, nextSessionState);
+  let guard = 0;
+
+  while (currentTrackId && typeof currentTrackEndsAtMs === 'number' && currentTrackEndsAtMs <= nowMs && guard < 32) {
+    const queuedTrackIds = getJukeboxQueuedTrackIds(fixture, nextSessionState);
+    const nextQueuedTrackId = queuedTrackIds[0];
+
+    if (!nextQueuedTrackId) {
+      nextSessionState = clearJukeboxTrack(nextSessionState, fixture);
+      break;
+    }
+
+    const nextSong = getJukeboxCatalogSongById(fixture, nextQueuedTrackId);
+    nextSessionState = setJukeboxQueuedTrackIds(nextSessionState, fixture, queuedTrackIds.slice(1));
+
+    if (!nextSong) {
+      nextSessionState = clearJukeboxTrack(nextSessionState, fixture);
+      currentTrackId = undefined;
+      currentTrackEndsAtMs = undefined;
+      guard += 1;
+      continue;
+    }
+
+    nextSessionState = setJukeboxTrack(nextSessionState, fixture, nextSong, currentTrackEndsAtMs, 'paid');
+    currentTrackId = nextSong.id;
+    currentTrackEndsAtMs = getJukeboxTrackEndsAtMs(fixture, nextSessionState);
+    guard += 1;
+  }
+
+  return nextSessionState;
+}
+
+function getJukeboxCatalogSongs(fixture: FixtureReference): JukeboxCatalogSong[] {
+  return fixture.catalogId ? (JUKEBOX_CATALOGS[fixture.catalogId] ?? []) : [];
+}
+
+function getJukeboxMaxQueueLength(fixture: FixtureReference): number {
+  return typeof fixture.maxQueueLength === 'number' && Number.isFinite(fixture.maxQueueLength) && fixture.maxQueueLength > 0
+    ? Math.floor(fixture.maxQueueLength)
+    : JUKEBOX_DEFAULT_MAX_QUEUE_LENGTH;
+}
+
+function isJukeboxQueueFull(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+  currentTrackId: string | undefined,
+  currentTrackMode: 'autoplay' | 'paid' | undefined,
+): boolean {
+  if (!currentTrackId || currentTrackMode === 'autoplay') {
+    return false;
+  }
+
+  return getJukeboxQueuedTrackIds(fixture, sessionState).length >= getJukeboxMaxQueueLength(fixture);
+}
+
+function getJukeboxBrowseIndex(fixture: FixtureReference, sessionState: RuntimeSessionState): number {
+  const songCount = getJukeboxCatalogSongs(fixture).length;
+  const value = getRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.browseIndex`);
+  const normalizedValue = typeof value === 'number' ? Math.floor(value) : 0;
+
+  if (songCount <= 0) {
+    return 0;
+  }
+
+  return ((normalizedValue % songCount) + songCount) % songCount;
+}
+
+function setJukeboxBrowseIndex(
+  sessionState: RuntimeSessionState,
+  fixture: FixtureReference,
+  browseIndex: number,
+): RuntimeSessionState {
+  return setRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.browseIndex`, browseIndex);
+}
+
+function getJukeboxQueuedTrackIds(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+): string[] {
+  const value = getRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.queueTrackIds`);
+
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+}
+
+function setJukeboxQueuedTrackIds(
+  sessionState: RuntimeSessionState,
+  fixture: FixtureReference,
+  queueTrackIds: string[],
+): RuntimeSessionState {
+  return setRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.queueTrackIds`, queueTrackIds);
+}
+
+function getJukeboxFakeCreditCount(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+): number {
+  const value = getRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.fakeCredits`);
+
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
+}
+
+function setJukeboxFakeCreditCount(
+  sessionState: RuntimeSessionState,
+  fixture: FixtureReference,
+  fakeCredits: number,
+): RuntimeSessionState {
+  return setRuntimeSessionValue(sessionState, `objects.${getFixtureStateId(fixture)}.fakeCredits`, Math.max(0, Math.floor(fakeCredits)));
+}
+
+function getJukeboxPreviewSong(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+): JukeboxCatalogSong | undefined {
+  const songs = getJukeboxCatalogSongs(fixture);
+
+  if (songs.length === 0) {
+    return undefined;
+  }
+
+  return songs[getJukeboxBrowseIndex(fixture, sessionState)];
+}
+
+function getJukeboxPreviewLogScope(fixture: FixtureReference): string {
+  return `fixture-preview:${fixture.id}`;
+}
+
+function createJukeboxPreviewLogEntry(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+): ProjectedLogEntry {
+  const song = getJukeboxPreviewSong(fixture, sessionState);
+
+  if (!song) {
+    return createLogEntry(`${fixture.displayName} has nothing queued in the catalog yet.`, undefined, undefined, 'recent');
+  }
+
+  const browseIndex = getJukeboxBrowseIndex(fixture, sessionState);
+  const marqueeText = song.marqueeTexts[browseIndex % song.marqueeTexts.length] ?? song.marqueeTexts[0];
+  const flavorText = song.flavorTexts[browseIndex % song.flavorTexts.length] ?? song.flavorTexts[0];
+
+  return {
+    ...createLogEntry(`${formatJukeboxSongText(song)}.`, undefined, [
+      {
+        groupId: 'jukebox-preview',
+        kind: 'paragraph',
+        text: `${formatJukeboxSongText(song)}.`,
+      },
+      {
+        groupId: 'jukebox-preview',
+        kind: 'paragraph',
+        text: `${song.approxDurationText}. Price: ${formatJukeboxPriceText(getJukeboxSongPriceDollars(song))}. Vibe: ${song.vibe}.`,
+      },
+      {
+        groupId: 'jukebox-preview',
+        kind: 'paragraph',
+        text: marqueeText,
+      },
+      {
+        groupId: 'jukebox-preview',
+        kind: 'paragraph',
+        text: flavorText,
+      },
+    ], 'recent'),
+    scope: getJukeboxPreviewLogScope(fixture),
+  };
+}
+
+function createJukeboxQueueLogEntry(
+  fixture: FixtureReference,
+  sessionState: RuntimeSessionState,
+): ProjectedLogEntry {
+  const previewSong = getJukeboxPreviewSong(fixture, sessionState);
+  const currentTrackText = getJukeboxCurrentTrackText(fixture, sessionState);
+  const currentTrackId = getJukeboxCurrentTrackId(fixture, sessionState);
+  const currentTrackSong = currentTrackId ? getJukeboxCatalogSongById(fixture, currentTrackId) : undefined;
+  const currentTrackMode = getJukeboxTrackMode(fixture, sessionState);
+  const currentTrackEndsAtMs = getJukeboxTrackEndsAtMs(fixture, sessionState);
+  const currentTrackNowMs = getRuntimeClockSnapshotFromSessionState(sessionState)?.nowMs ?? Date.now();
+  const currentTrackTimeLeftSeconds = typeof currentTrackEndsAtMs === 'number'
+    ? Math.max(0, Math.ceil((currentTrackEndsAtMs - currentTrackNowMs) / 1000))
+    : undefined;
+  const queuedSongs = getJukeboxQueuedTrackIds(fixture, sessionState)
+    .map((songId) => getJukeboxCatalogSongById(fixture, songId))
+    .filter((song): song is JukeboxCatalogSong => Boolean(song));
+  const fakeCredits = getJukeboxFakeCreditCount(fixture, sessionState);
+  const blocks: ProjectedProseBlock[] = [];
+
+  blocks.push({
+    groupId: 'jukebox-queue',
+    kind: 'paragraph',
+    text: previewSong
+      ? `Selected: ${formatJukeboxSongText(previewSong)}. Price: ${formatJukeboxPriceText(getJukeboxSongPriceDollars(previewSong))}. Duration: ${formatJukeboxDurationText(previewSong.approxDurationSeconds)}.`
+      : `Selected: ${fixture.displayName} has no highlighted song yet.`,
+  });
+
+  blocks.push({
+    groupId: 'jukebox-queue',
+    kind: 'paragraph',
+    text: currentTrackText && currentTrackSong
+      ? `Now Playing: ${currentTrackText}. ${currentTrackMode === 'autoplay' ? 'Mode: motion-sensing autoplay.' : 'Mode: paid selection.'}${typeof currentTrackTimeLeftSeconds === 'number' ? ` Time left: ${formatJukeboxDurationText(currentTrackTimeLeftSeconds)}.` : ''}`
+      : 'Now Playing: nothing yet.',
+  });
+
+  if (queuedSongs.length === 0) {
+    blocks.push({
+      groupId: 'jukebox-queue',
+      kind: 'paragraph',
+      text: 'Queue: empty right now.',
+    });
+  } else {
+    blocks.push({
+      groupId: 'jukebox-queue',
+      kind: 'paragraph',
+      text: 'Queue:',
+    });
+
+    queuedSongs.forEach((song, index) => {
+      blocks.push({
+        groupId: 'jukebox-queue',
+        kind: 'paragraph',
+        text: `${index + 1}. ${formatJukeboxSongText(song)}. ${formatJukeboxPriceText(getJukeboxSongPriceDollars(song))}. ${formatJukeboxDurationText(song.approxDurationSeconds)}.`,
+      });
+    });
+  }
+
+  blocks.push({
+    groupId: 'jukebox-queue',
+    kind: 'paragraph',
+    text: `Fake credits ready: ${formatJukeboxPriceText(fakeCredits)}.`,
+  });
+
+  return createLogEntry(blocks[0]?.text ?? `${fixture.displayName} queue.`, undefined, blocks, 'recent');
 }

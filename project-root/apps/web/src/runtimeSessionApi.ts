@@ -53,6 +53,22 @@ export interface RuntimeSessionRestoreSnapshot {
   sessionState: RuntimeSessionState;
 }
 
+export interface RuntimeSessionStream {
+  onmessage: ((event: MessageEvent<unknown>) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  close(): void;
+}
+
+export interface ServerRuntimeSessionSource {
+  subscribeSession(
+    sessionId: string,
+    callbacks?: {
+      onUpdate?: (sessionView: RuntimeSessionView) => void;
+      onError?: (error: unknown) => void;
+    },
+  ): () => void;
+}
+
 export async function createRuntimeSession(projectId: string, options: {
   nodeId?: string;
   pathDirection?: PathDirection;
@@ -79,6 +95,39 @@ export async function applyRuntimeSessionControl(sessionId: string, control: Pro
 
 export async function resetRuntimeSession(sessionId: string, destinationNodeId?: string): Promise<RuntimeSessionView | undefined> {
   return postJson<RuntimeSessionView>(`/api/runtime-session/${encodeURIComponent(sessionId)}/reset`, { destinationNodeId });
+}
+
+export function createServerRuntimeSessionSource(
+  streamFactory: (url: string) => RuntimeSessionStream = (url) => new EventSource(url),
+): ServerRuntimeSessionSource {
+  return {
+    subscribeSession(sessionId, callbacks) {
+      const stream = streamFactory(buildRuntimeSessionStreamUrl(sessionId));
+
+      stream.onmessage = (event) => {
+        if (typeof event.data !== 'string') {
+          return;
+        }
+
+        const sessionView = JSON.parse(event.data) as RuntimeSessionView;
+        callbacks?.onUpdate?.(sessionView);
+      };
+
+      stream.onerror = (error) => {
+        callbacks?.onError?.(error);
+      };
+
+      return () => {
+        stream.onmessage = null;
+        stream.onerror = null;
+        stream.close();
+      };
+    },
+  };
+}
+
+export function buildRuntimeSessionStreamUrl(sessionId: string): string {
+  return `/api/runtime-session/${encodeURIComponent(sessionId)}/stream`;
 }
 
 async function fetchJson<T>(url: string): Promise<T | undefined> {

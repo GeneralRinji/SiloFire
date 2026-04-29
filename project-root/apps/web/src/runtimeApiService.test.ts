@@ -6,7 +6,8 @@ import { relative, resolve } from 'node:path';
 import {
   createRuntimeApiService,
   matchRuntimeApiRequest,
-  type PersistedRuntimeSessionSnapshot,
+  type PersistedContinueSessionState,
+  type PersistedProjectWorldState,
   type SiteAnnouncementRecord,
 } from '../../../packages/runtime-server/src';
 
@@ -44,34 +45,6 @@ class MemoryRuntimeStore {
     });
 
     return Array.from(children.entries()).map(([name, isFile]) => ({ name, isFile }));
-  }
-}
-
-class MemorySnapshotStore {
-  constructor(private readonly values: Record<string, PersistedRuntimeSessionSnapshot> = {}) {}
-
-  async has(key: string): Promise<boolean> {
-    return Object.prototype.hasOwnProperty.call(this.values, key);
-  }
-
-  async get(key: string): Promise<PersistedRuntimeSessionSnapshot | undefined> {
-    return this.values[key];
-  }
-
-  async set(key: string, value: PersistedRuntimeSessionSnapshot): Promise<void> {
-    this.values[key] = value;
-  }
-
-  async delete(key: string): Promise<void> {
-    delete this.values[key];
-  }
-
-  async *list(prefix?: string): AsyncIterable<{ key: string; value: PersistedRuntimeSessionSnapshot }> {
-    for (const [key, value] of Object.entries(this.values)) {
-      if (!prefix || key === prefix || key.startsWith(`${prefix}/`)) {
-        yield { key, value };
-      }
-    }
   }
 }
 
@@ -163,6 +136,10 @@ test('runtime api request matcher resolves session routes', () => {
     kind: 'admin_heart_reset',
     projectId: 'demo04',
   });
+  assert.deepEqual(matchRuntimeApiRequest('/api/runtime-admin/jukeboxes/PrototypeHub/reset'), {
+    kind: 'admin_jukebox_reset',
+    projectId: 'PrototypeHub',
+  });
   assert.deepEqual(matchRuntimeApiRequest('/api/runtime-session/demo04/start'), {
     kind: 'session_create',
     projectId: 'demo04',
@@ -181,6 +158,10 @@ test('runtime api request matcher resolves session routes', () => {
   });
   assert.deepEqual(matchRuntimeApiRequest('/api/runtime-session/session_1/reset'), {
     kind: 'session_reset',
+    sessionId: 'session_1',
+  });
+  assert.deepEqual(matchRuntimeApiRequest('/api/runtime-session/session_1/stream'), {
+    kind: 'session_stream',
     sessionId: 'session_1',
   });
 });
@@ -419,19 +400,9 @@ test('runtime api heart analytics add, remove, rank, project detail, and reset w
 });
 
 test('runtime api admin project detail prefers persisted shared session state over authored defaults', async () => {
-  const snapshotStore = new MemorySnapshotStore({
-    'projects/demo04/snapshot': {
+  const worldStateStore = new MemoryValueStore<PersistedProjectWorldState>({
+    'projects/demo04/world-state': {
       projectId: 'demo04',
-      route: {
-        nodeId: 'building04_groundfloor',
-        pathDirection: undefined,
-        pathBeatIndex: undefined,
-        runNonce: 0,
-      },
-      areaVisitCounts: {},
-      pathVisitCounts: {},
-      recentLogByNodeId: {},
-      actionAttemptsByNodeId: {},
       sessionState: {
         npcs: {
           resident_01: {
@@ -452,7 +423,7 @@ test('runtime api admin project detail prefers persisted shared session state ov
 
   const runtimeApi = createRuntimeApiService(new MemoryRuntimeStore(loadProjectFiles('demo04')), {
     adminPassword: 'open-sesame',
-    snapshotStore,
+    worldStateStore,
   });
 
   const details = await runtimeApi.getHeartAdminProject('demo04');
@@ -471,6 +442,175 @@ test('runtime api admin project detail prefers persisted shared session state ov
   });
   assert.deepEqual(details.objectFieldDetailsById?.building03_door?.open?.defaultValue, true);
   assert.deepEqual(details.objectFieldDetailsById?.building03_door?.open?.possibleValues, [true, false]);
+});
+
+test('runtime api admin jukebox reset clears persisted and active project jukebox state', async () => {
+  const worldStateStore = new MemoryValueStore<PersistedProjectWorldState>({
+    'projects/PrototypeHub/world-state': {
+      projectId: 'PrototypeHub',
+      sessionState: {
+        objects: {
+          prototypehub_lobby_jukebox: {
+            browseIndex: 10,
+            fakeCredits: 12,
+            currentTrack: 'song_011',
+            currentTrackLabel: 'Queue Limit Test Beep by Service Mode',
+            currentTrackMode: 'paid',
+            currentTrackStartedAtMs: 10,
+            currentTrackEndsAtMs: 25,
+            queueTrackIds: ['song_011', 'song_011'],
+          },
+        },
+        player: {
+          location: 'lobby_area',
+          active: {
+            location: 'lobby_area',
+          },
+        },
+        world: {
+          time: {
+            nowMs: 20,
+            phase: 'day',
+            cycle: ['day', 'night'],
+            source: 'preview-local',
+          },
+        },
+        npcs: {},
+      },
+      savedAt: 20,
+    },
+  });
+  const continueStore = new MemoryValueStore<PersistedContinueSessionState>({
+    'projects/PrototypeHub/continue-state': {
+      projectId: 'PrototypeHub',
+      route: {
+        nodeId: 'lobby_area',
+        runNonce: 1,
+      },
+      areaVisitCounts: {
+        lobby_area: 1,
+      },
+      pathVisitCounts: {},
+      recentLogByNodeId: {
+        lobby_area: [
+          {
+            id: 'log-jukebox-queue',
+            text: 'Selected: **Queue Limit Test Beep** by Service Mode. Price: $1.00. Duration: 0:15.',
+            lane: 'recent',
+            blocks: [
+              {
+                groupId: 'jukebox-queue',
+                kind: 'paragraph',
+                text: 'Selected: **Queue Limit Test Beep** by Service Mode. Price: $1.00. Duration: 0:15.',
+              },
+            ],
+          },
+          {
+            id: 'log-keep-me',
+            text: 'The lobby hums quietly.',
+            lane: 'recent',
+          },
+        ],
+      },
+      actionAttemptsByNodeId: {},
+      sessionState: {
+        objects: {
+          prototypehub_lobby_jukebox: {
+            browseIndex: 10,
+            fakeCredits: 12,
+            currentTrack: 'song_011',
+            currentTrackLabel: 'Queue Limit Test Beep by Service Mode',
+            currentTrackMode: 'paid',
+            currentTrackStartedAtMs: 10,
+            currentTrackEndsAtMs: 25,
+            queueTrackIds: ['song_011', 'song_011'],
+          },
+        },
+        player: {
+          location: 'lobby_area',
+          active: {
+            location: 'lobby_area',
+          },
+        },
+        world: {
+          time: {
+            nowMs: 20,
+            phase: 'day',
+            cycle: ['day', 'night'],
+            source: 'preview-local',
+          },
+        },
+        npcs: {},
+      },
+      savedAt: 20,
+    },
+  });
+
+  const runtimeApi = createRuntimeApiService(new MemoryRuntimeStore(loadProjectFiles('PrototypeHub')), {
+    adminPassword: 'open-sesame',
+    worldStateStore,
+    continueStore,
+  });
+  const sessionView = await runtimeApi.createSession('PrototypeHub');
+
+  if (!sessionView) {
+    throw new Error('Expected PrototypeHub session for admin jukebox reset test.');
+  }
+
+  const activeSessionIds = await runtimeApi.resetProjectJukeboxes('PrototypeHub');
+  assert.deepEqual(activeSessionIds, [sessionView.snapshot.sessionId]);
+
+  const activeSession = await runtimeApi.getSession(sessionView.snapshot.sessionId);
+
+  if (!activeSession) {
+    throw new Error('Expected active PrototypeHub session after admin jukebox reset.');
+  }
+
+  assert.equal(
+    ((activeSession.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'none',
+  );
+  assert.equal(
+    ((activeSession.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.fakeCredits),
+    0,
+  );
+  assert.deepEqual(
+    ((activeSession.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.queueTrackIds),
+    [],
+  );
+
+  const resetWorldState = await worldStateStore.get('projects/PrototypeHub/world-state');
+  assert.equal(
+    ((resetWorldState?.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'none',
+  );
+  assert.equal(
+    ((resetWorldState?.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.fakeCredits),
+    0,
+  );
+  assert.deepEqual(
+    ((resetWorldState?.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.queueTrackIds),
+    [],
+  );
+
+  const resetContinueState = await continueStore.get('projects/PrototypeHub/continue-state');
+  assert.equal(
+    ((resetContinueState?.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'none',
+  );
+  assert.equal(
+    ((resetContinueState?.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.fakeCredits),
+    0,
+  );
+  assert.deepEqual(
+    ((resetContinueState?.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.queueTrackIds),
+    [],
+  );
+  assert.equal(
+    resetContinueState?.recentLogByNodeId.lobby_area?.some((entry) => entry.blocks?.some((block) => block.groupId === 'jukebox-queue')),
+    false,
+  );
+  assert.equal(resetContinueState?.recentLogByNodeId.lobby_area?.some((entry) => entry.text === 'The lobby hums quietly.'), true);
 });
 
 test('runtime api service exposes session-backed progression over project content', async () => {
@@ -1798,6 +1938,886 @@ test('runtime api building03 door respects explicit closed state during open hou
   }
 
   assert.equal(closedHoursView.page.recentLog?.at(-1)?.text, 'Open all day. Closed at night. Right now the place is closed.');
+});
+
+test('runtime api PrototypeHub requires opening the door before entering and logs the jukebox note in the lobby', async () => {
+  let nowMs = 0;
+  const runtimeApi = createRuntimeApiService(new MemoryRuntimeStore(loadProjectFiles('PrototypeHub')), {
+    now: () => nowMs,
+  });
+
+  const gateView = await runtimeApi.createSession('PrototypeHub', { nodeId: 'outside_lobbygate' });
+
+  if (!gateView?.page || gateView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page.');
+  }
+
+  assert.equal(
+    ((gateView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_door?.open),
+    false,
+  );
+  assert.equal(
+    gateView.offeredActions.some((action) => action.id === 'enter_prototypehub_lobby'),
+    false,
+  );
+
+  const businessHoursAction = gateView.page.actions.find(
+    (action) => action.id === 'business_hours' && action.kind === 'poi',
+  );
+
+  if (!businessHoursAction) {
+    throw new Error('Expected PrototypeHub business hours action.');
+  }
+
+  const businessHoursView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, businessHoursAction);
+
+  if (!businessHoursView?.page || businessHoursView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page after inspecting business hours.');
+  }
+
+  assert.equal(businessHoursView.page.recentLog?.at(-1)?.text, 'Open always. Closed never.');
+
+  const openDoorAction = gateView.offeredActions.find((action) => action.id === 'open_prototypehub_door');
+
+  if (!openDoorAction) {
+    throw new Error('Expected offered action to open the PrototypeHub door.');
+  }
+
+  const openedDoorView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, openDoorAction);
+
+  if (!openedDoorView?.page || openedDoorView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page after opening the door.');
+  }
+
+  assert.equal(
+    ((openedDoorView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_door?.open),
+    true,
+  );
+  assert.equal(
+    openedDoorView.offeredActions.some((action) => action.id === 'enter_prototypehub_lobby'),
+    true,
+  );
+  assert.equal(
+    ((openedDoorView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_door?.openedAtMs),
+    0,
+  );
+
+  nowMs = 11_000;
+
+  const autoClosedDoorView = await runtimeApi.getSession(gateView.snapshot.sessionId);
+
+  if (!autoClosedDoorView?.page || autoClosedDoorView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page after the door swings shut.');
+  }
+
+  assert.equal(
+    ((autoClosedDoorView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_door?.open),
+    false,
+  );
+  assert.equal(
+    autoClosedDoorView.offeredActions.some((action) => action.id === 'enter_prototypehub_lobby'),
+    false,
+  );
+  assert.equal(
+    autoClosedDoorView.offeredActions.some((action) => action.id === 'open_prototypehub_door'),
+    true,
+  );
+  assert.equal(autoClosedDoorView.page.recentLog?.at(-1)?.text, 'The door swings shut.');
+
+  const reopenedDoorAction = autoClosedDoorView.offeredActions.find((action) => action.id === 'open_prototypehub_door');
+
+  if (!reopenedDoorAction) {
+    throw new Error('Expected offered action to reopen the PrototypeHub door.');
+  }
+
+  nowMs = 12_000;
+
+  const reopenedDoorView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, reopenedDoorAction);
+
+  if (!reopenedDoorView?.page || reopenedDoorView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page after reopening the door.');
+  }
+
+  assert.equal(
+    ((reopenedDoorView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_door?.openedAtMs),
+    12_000,
+  );
+
+  const enterLobbyAction = reopenedDoorView.offeredActions.find((action) => action.id === 'enter_prototypehub_lobby');
+
+  if (!enterLobbyAction) {
+    throw new Error('Expected offered action to enter the PrototypeHub lobby.');
+  }
+
+  const lobbyView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, enterLobbyAction);
+
+  if (!lobbyView?.page || lobbyView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after entering.');
+  }
+
+  assert.equal(lobbyView.page.title, 'Prototype Hub Lobby');
+  assert.equal(
+    lobbyView.page.proseBlocks.some((block) => block.text.includes('The little bell over the door gives a bright quick jingle behind you.')),
+    true,
+  );
+
+  const explainAction = lobbyView.page.actions.find(
+    (action) => action.id === 'explain_prototypehub' && action.kind === 'poi',
+  );
+  const jukeboxAction = lobbyView.page.actions.find(
+    (action) => action.id === 'prototypehub_lobby_jukebox' && action.kind === 'poi',
+  );
+
+  if (!explainAction) {
+    throw new Error('Expected offered action to explain the PrototypeHub prototype.');
+  }
+
+  if (!jukeboxAction) {
+    throw new Error('Expected PrototypeHub jukebox fixture action.');
+  }
+
+  const explainActionIndex = lobbyView.page.actions.findIndex((action) => action.id === 'explain_prototypehub');
+  const jukeboxActionIndex = lobbyView.page.actions.findIndex((action) => action.id === 'prototypehub_lobby_jukebox');
+
+  assert.equal(explainActionIndex >= 0 && jukeboxActionIndex >= 0 && explainActionIndex < jukeboxActionIndex, true);
+  assert.equal(
+    lobbyView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_left'),
+    false,
+  );
+  assert.equal(
+    lobbyView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_right'),
+    false,
+  );
+  assert.equal(
+    lobbyView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:queue_song'),
+    false,
+  );
+  assert.equal(
+    lobbyView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:step_away'),
+    false,
+  );
+
+  const focusedJukeboxView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, jukeboxAction);
+
+  if (!focusedJukeboxView?.page || focusedJukeboxView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after focusing the jukebox.');
+  }
+
+  assert.equal(
+    focusedJukeboxView.page.recentLog?.some((entry) => entry.text === 'The jukebox catches the motion near its controls and wakes itself with **Never Gonna Give You Up** by Rick Astley.'),
+    true,
+  );
+  assert.equal(
+    focusedJukeboxView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_left'),
+    true,
+  );
+  assert.equal(
+    focusedJukeboxView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_right'),
+    true,
+  );
+  assert.equal(
+    focusedJukeboxView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:view_queue'),
+    true,
+  );
+  assert.equal(
+    focusedJukeboxView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:add_fake_money'),
+    true,
+  );
+  assert.equal(
+    focusedJukeboxView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:queue_song'),
+    true,
+  );
+  assert.equal(
+    focusedJukeboxView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:stop'),
+    false,
+  );
+  assert.equal(focusedJukeboxView.offeredActions[0]?.label, '<< Swipe Left');
+  assert.equal(focusedJukeboxView.offeredActions[1]?.label, 'Swipe Right >>');
+  assert.equal(focusedJukeboxView.offeredActions[2]?.id, 'fixture:prototypehub_lobby_jukebox:queue_song');
+  assert.equal(
+    ((focusedJukeboxView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'song_001',
+  );
+  assert.equal(
+    ((focusedJukeboxView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrackMode),
+    'autoplay',
+  );
+
+  const stepAwayAction = focusedJukeboxView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:step_away',
+  );
+
+  if (!stepAwayAction) {
+    throw new Error('Expected offered action to step away from the PrototypeHub jukebox.');
+  }
+
+  const steppedAwayView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, stepAwayAction);
+
+  if (!steppedAwayView?.page || steppedAwayView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after stepping away from the jukebox.');
+  }
+
+  assert.equal(
+    ((steppedAwayView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'song_001',
+  );
+  assert.equal(
+    steppedAwayView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_left'),
+    false,
+  );
+  assert.equal(
+    steppedAwayView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_right'),
+    false,
+  );
+  assert.equal(
+    steppedAwayView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:queue_song'),
+    false,
+  );
+  assert.equal(
+    steppedAwayView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:step_away'),
+    false,
+  );
+
+  nowMs = 57_000;
+
+  const lobbyAtmosphereView = await runtimeApi.getSession(gateView.snapshot.sessionId);
+
+  if (!lobbyAtmosphereView?.page || lobbyAtmosphereView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page while the song keeps filling the room.');
+  }
+
+  assert.equal(
+    lobbyAtmosphereView.page.proseBlocks.some((block) => block.text === "You feel like you've been here before..."),
+    true,
+  );
+  assert.equal(
+    lobbyAtmosphereView.page.recentLog?.some((entry) => entry.text === "You feel like you've been here before..."),
+    true,
+  );
+
+  nowMs = 226_000;
+
+  const autoplayFinishedView = await runtimeApi.getSession(gateView.snapshot.sessionId);
+
+  if (!autoplayFinishedView?.page || autoplayFinishedView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after the motion-sensing autoplay finishes.');
+  }
+
+  assert.equal(
+    ((autoplayFinishedView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'none',
+  );
+
+  const refocusedJukeboxAction = autoplayFinishedView.page.actions.find(
+    (action) => action.id === 'prototypehub_lobby_jukebox' && action.kind === 'poi',
+  );
+
+  if (!refocusedJukeboxAction) {
+    throw new Error('Expected PrototypeHub jukebox fixture action after autoplay completion.');
+  }
+
+  const refocusedJukeboxView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, refocusedJukeboxAction);
+
+  if (!refocusedJukeboxView?.page || refocusedJukeboxView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after refocusing the idle jukebox.');
+  }
+
+  const swipeRightAction = refocusedJukeboxView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_right',
+  );
+
+  if (!swipeRightAction) {
+    throw new Error('Expected offered action to swipe right through the PrototypeHub jukebox catalog.');
+  }
+
+  const firstSwipeView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, swipeRightAction);
+
+  if (!firstSwipeView?.page || firstSwipeView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after first jukebox swipe.');
+  }
+
+  assert.equal(
+    firstSwipeView.page.recentLog?.some((entry) => entry.text === '**Take On Me** by a-ha.'),
+    true,
+  );
+  assert.equal(
+    firstSwipeView.page.recentLog?.some((entry) => entry.text === 'The jukebox catches the motion near its controls and wakes itself with **Never Gonna Give You Up** by Rick Astley.'),
+    false,
+  );
+
+  const secondSwipeView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, swipeRightAction);
+
+  if (!secondSwipeView?.page || secondSwipeView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after second jukebox swipe.');
+  }
+
+  assert.equal(
+    secondSwipeView.page.recentLog?.some((entry) => entry.text === '**Africa** by Toto.'),
+    true,
+  );
+  assert.equal(
+    secondSwipeView.page.recentLog?.some((entry) => entry.text === '**Take On Me** by a-ha.'),
+    false,
+  );
+
+  const viewQueueAction = secondSwipeView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:view_queue',
+  );
+
+  if (!viewQueueAction) {
+    throw new Error('Expected offered action to view the PrototypeHub jukebox queue.');
+  }
+
+  const queueView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, viewQueueAction);
+
+  if (!queueView?.page || queueView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after viewing the jukebox queue.');
+  }
+
+  assert.equal(
+    queueView.page.recentLog?.some((entry) => entry.text === 'Selected: **Africa** by Toto. Price: $1.00. Duration: 4:55.'),
+    true,
+  );
+  assert.equal(
+    queueView.page.recentLog?.some((entry) => entry.blocks?.some((block) => block.text === 'Now Playing: **Never Gonna Give You Up** by Rick Astley. Mode: motion-sensing autoplay. Time left: 0:00.')),
+    false,
+  );
+  assert.equal(
+    queueView.page.recentLog?.some((entry) => entry.blocks?.some((block) => block.text === 'Queue: empty right now.')),
+    true,
+  );
+  assert.equal(
+    queueView.page.recentLog?.some((entry) => entry.blocks?.some((block) => block.text === 'Fake credits ready: $0.00.')),
+    true,
+  );
+
+  const addFakeMoneyAction = secondSwipeView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:add_fake_money',
+  );
+
+  if (!addFakeMoneyAction) {
+    throw new Error('Expected offered action to put fake money into the PrototypeHub jukebox.');
+  }
+
+  const creditedJukeboxView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, addFakeMoneyAction);
+
+  if (!creditedJukeboxView?.page || creditedJukeboxView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after adding fake money.');
+  }
+
+  assert.equal(
+    ((creditedJukeboxView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.fakeCredits),
+    1,
+  );
+
+  const queueSongAction = secondSwipeView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:queue_song',
+  );
+
+  if (!queueSongAction) {
+    throw new Error('Expected offered action to queue the selected PrototypeHub jukebox song.');
+  }
+
+  const playingJukeboxView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, queueSongAction);
+
+  if (!playingJukeboxView?.page || playingJukeboxView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after playing the jukebox.');
+  }
+
+  assert.equal(
+    ((playingJukeboxView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'song_003',
+  );
+  assert.equal(
+    ((playingJukeboxView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrackMode),
+    'paid',
+  );
+  assert.equal(
+    ((playingJukeboxView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.fakeCredits),
+    0,
+  );
+  assert.equal(
+    playingJukeboxView.page.recentLog?.some((entry) => entry.text === 'The jukebox drops its motion-sensing fallback and switches to **Africa** by Toto.'),
+    true,
+  );
+
+  const thirdSwipeView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, swipeRightAction);
+
+  if (!thirdSwipeView?.page || thirdSwipeView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after third jukebox swipe.');
+  }
+
+  assert.equal(
+    thirdSwipeView.page.recentLog?.some((entry) => entry.text === '**All Star** by Smash Mouth.'),
+    true,
+  );
+
+  const secondFakeMoneyView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, addFakeMoneyAction);
+
+  if (!secondFakeMoneyView?.page || secondFakeMoneyView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after adding fake money for the queued track.');
+  }
+
+  const queuedJukeboxView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, queueSongAction);
+
+  if (!queuedJukeboxView?.page || queuedJukeboxView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after queueing the next jukebox song.');
+  }
+
+  assert.deepEqual(
+    ((queuedJukeboxView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.queueTrackIds),
+    ['song_004'],
+  );
+  assert.equal(
+    ((queuedJukeboxView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'song_003',
+  );
+  assert.equal(
+    queuedJukeboxView.page.recentLog?.some((entry) => entry.text === 'The jukebox accepts $1.00 and adds **All Star** by Smash Mouth to the queue.'),
+    true,
+  );
+
+  const liveQueueView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, viewQueueAction);
+
+  if (!liveQueueView?.page || liveQueueView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after reopening the live jukebox queue.');
+  }
+
+  assert.equal(
+    liveQueueView.page.recentLog?.some((entry) => entry.blocks?.some((block) => block.text.includes('Now Playing: **Africa** by Toto. Mode: paid selection.'))),
+    true,
+  );
+  assert.equal(
+    liveQueueView.page.recentLog?.some((entry) => entry.blocks?.some((block) => block.text === '1. **All Star** by Smash Mouth. $1.00. 3:21.')),
+    true,
+  );
+
+  nowMs = 226_000 + 294_000;
+
+  const stillPlayingAfricaView = await runtimeApi.getSession(gateView.snapshot.sessionId);
+
+  if (!stillPlayingAfricaView?.page || stillPlayingAfricaView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page just before Africa finishes.');
+  }
+
+  assert.equal(
+    ((stillPlayingAfricaView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'song_003',
+  );
+
+  nowMs = 226_000 + 296_000;
+
+  const advancedQueueView = await runtimeApi.getSession(gateView.snapshot.sessionId);
+
+  if (!advancedQueueView?.page || advancedQueueView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after the next queued track starts.');
+  }
+
+  assert.equal(
+    ((advancedQueueView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'song_004',
+  );
+  assert.deepEqual(
+    ((advancedQueueView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.queueTrackIds),
+    [],
+  );
+  assert.equal(
+    advancedQueueView.page.recentLog?.some((entry) => entry.blocks?.some((block) => block.text.includes('Now Playing: **All Star** by Smash Mouth. Mode: paid selection.'))),
+    true,
+  );
+  assert.equal(
+    advancedQueueView.page.recentLog?.some((entry) => entry.blocks?.some((block) => block.text === 'Queue: empty right now.')),
+    true,
+  );
+
+  nowMs = 226_000 + 296_000 + 202_000;
+
+  const finishedQueueView = await runtimeApi.getSession(gateView.snapshot.sessionId);
+
+  if (!finishedQueueView?.page || finishedQueueView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after the paid queue empties.');
+  }
+
+  assert.equal(
+    ((finishedQueueView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'none',
+  );
+  assert.equal(
+    finishedQueueView.page.recentLog?.some((entry) => entry.blocks?.some((block) => block.text === 'Now Playing: nothing yet.')),
+    true,
+  );
+  assert.equal(
+    finishedQueueView.page.recentLog?.some((entry) => entry.blocks?.some((block) => block.text === 'Queue: empty right now.')),
+    true,
+  );
+
+  const explainedView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, explainAction);
+
+  if (!explainedView?.page || explainedView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after explanation action.');
+  }
+
+  assert.equal(
+    explainedView.page.recentLog?.some((entry) => entry.text === 'Prototype Hub exists to test a future jukebox interaction model.'),
+    true,
+  );
+});
+
+test('runtime api PrototypeHub jukebox state persists across refresh continue and reset run', async () => {
+  let nowMs = 0;
+  const continueStore = new MemoryValueStore<PersistedContinueSessionState>();
+  const worldStateStore = new MemoryValueStore<PersistedProjectWorldState>();
+  const runtimeApi = createRuntimeApiService(new MemoryRuntimeStore(loadProjectFiles('PrototypeHub')), {
+    now: () => nowMs,
+    continueStore,
+    worldStateStore,
+  });
+
+  const gateView = await runtimeApi.createSession('PrototypeHub', { nodeId: 'outside_lobbygate' });
+
+  if (!gateView?.page || gateView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page.');
+  }
+
+  const openDoorAction = gateView.offeredActions.find((action) => action.id === 'open_prototypehub_door');
+
+  if (!openDoorAction) {
+    throw new Error('Expected offered action to open the PrototypeHub door.');
+  }
+
+  const openedDoorView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, openDoorAction);
+
+  if (!openedDoorView?.page || openedDoorView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page after opening the door.');
+  }
+
+  const enterLobbyAction = openedDoorView.offeredActions.find((action) => action.id === 'enter_prototypehub_lobby');
+
+  if (!enterLobbyAction) {
+    throw new Error('Expected offered action to enter the PrototypeHub lobby.');
+  }
+
+  const lobbyView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, enterLobbyAction);
+
+  if (!lobbyView?.page || lobbyView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after entering.');
+  }
+
+  const jukeboxAction = lobbyView.page.actions.find(
+    (action) => action.id === 'prototypehub_lobby_jukebox' && action.kind === 'poi',
+  );
+
+  if (!jukeboxAction) {
+    throw new Error('Expected PrototypeHub jukebox fixture action.');
+  }
+
+  const focusedJukeboxView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, jukeboxAction);
+
+  if (!focusedJukeboxView?.page || focusedJukeboxView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after focusing the jukebox.');
+  }
+
+  const swipeRightAction = focusedJukeboxView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_right',
+  );
+  const addFakeMoneyAction = focusedJukeboxView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:add_fake_money',
+  );
+  const queueSongAction = focusedJukeboxView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:queue_song',
+  );
+
+  if (!swipeRightAction || !addFakeMoneyAction || !queueSongAction) {
+    throw new Error('Expected PrototypeHub jukebox controls after focusing the fixture.');
+  }
+
+  await runtimeApi.applySessionAction(gateView.snapshot.sessionId, swipeRightAction);
+  await runtimeApi.applySessionAction(gateView.snapshot.sessionId, swipeRightAction);
+  await runtimeApi.applySessionAction(gateView.snapshot.sessionId, addFakeMoneyAction);
+
+  const africaPlaybackView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, queueSongAction);
+
+  if (!africaPlaybackView?.page || africaPlaybackView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after starting Africa.');
+  }
+
+  await runtimeApi.applySessionAction(gateView.snapshot.sessionId, swipeRightAction);
+  await runtimeApi.applySessionAction(gateView.snapshot.sessionId, addFakeMoneyAction);
+
+  const queuedView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, queueSongAction);
+
+  if (!queuedView?.page || queuedView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after queueing All Star.');
+  }
+
+  nowMs = 120_000;
+
+  const refreshedView = await runtimeApi.getSession(gateView.snapshot.sessionId);
+
+  if (!refreshedView?.page || refreshedView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page when refreshing the active session.');
+  }
+
+  assert.equal(
+    ((refreshedView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'song_003',
+  );
+  assert.deepEqual(
+    ((refreshedView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.queueTrackIds),
+    ['song_004'],
+  );
+  assert.equal(
+    ((refreshedView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrackEndsAtMs),
+    295_000,
+  );
+
+  const titleView = await runtimeApi.createSession('PrototypeHub');
+
+  if (!titleView?.page || titleView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub title screen page.');
+  }
+
+  const continueAction = titleView.page.actions.find((action) => action.id === 'title_screen_continue');
+
+  if (!continueAction) {
+    throw new Error('Expected continue action on the PrototypeHub title screen.');
+  }
+
+  const continuedView = await runtimeApi.applySessionAction(titleView.snapshot.sessionId, continueAction);
+
+  if (!continuedView?.page || continuedView.page.kind !== 'page') {
+    throw new Error('Expected continued PrototypeHub lobby page.');
+  }
+
+  assert.equal(continuedView.page.nodeId, 'lobby_area');
+  assert.equal(
+    ((continuedView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'song_003',
+  );
+  assert.equal(
+    continuedView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_left'),
+    false,
+  );
+  assert.equal(
+    continuedView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:step_away'),
+    false,
+  );
+  assert.deepEqual(
+    ((continuedView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.queueTrackIds),
+    ['song_004'],
+  );
+  assert.equal(
+    ((continuedView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrackEndsAtMs),
+    295_000,
+  );
+
+  const resetView = await runtimeApi.resetSession(continuedView.snapshot.sessionId);
+
+  if (!resetView?.page || resetView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub title screen page after reset.');
+  }
+
+  assert.deepEqual(resetView.page.actions.map((action) => action.id), ['title_screen_new_game']);
+
+  const newGameAction = resetView.page.actions.find((action) => action.id === 'title_screen_new_game');
+
+  if (!newGameAction) {
+    throw new Error('Expected new game action after reset.');
+  }
+
+  const restartedView = await runtimeApi.applySessionAction(resetView.snapshot.sessionId, newGameAction);
+
+  if (!restartedView?.page || restartedView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub page after starting a new run from reset.');
+  }
+
+  assert.equal(
+    ((restartedView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrack),
+    'song_003',
+  );
+  assert.equal(
+    restartedView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_left'),
+    false,
+  );
+  assert.deepEqual(
+    ((restartedView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.queueTrackIds),
+    ['song_004'],
+  );
+  assert.equal(
+    ((restartedView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.currentTrackEndsAtMs),
+    295_000,
+  );
+
+  const approachDoorAction = restartedView.page.actions.find((action) => action.id === 'approach_lobby_door');
+
+  if (!approachDoorAction) {
+    throw new Error('Expected action to approach the PrototypeHub door after reset.');
+  }
+
+  const approachedDoorView = await runtimeApi.applySessionAction(resetView.snapshot.sessionId, approachDoorAction);
+
+  if (!approachedDoorView?.page || approachedDoorView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page after approaching the entrance again.');
+  }
+
+  const reopenedDoorAction = approachedDoorView.offeredActions.find((action) => action.id === 'open_prototypehub_door');
+  const readyToEnterView = reopenedDoorAction
+    ? await runtimeApi.applySessionAction(resetView.snapshot.sessionId, reopenedDoorAction)
+    : approachedDoorView;
+
+  if (!readyToEnterView?.page || readyToEnterView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page before re-entering the lobby.');
+  }
+
+  const reenterLobbyAction = readyToEnterView.offeredActions.find((action) => action.id === 'enter_prototypehub_lobby');
+
+  if (!reenterLobbyAction) {
+    throw new Error('Expected offered action to re-enter the PrototypeHub lobby after reset.');
+  }
+
+  const restartedLobbyView = await runtimeApi.applySessionAction(resetView.snapshot.sessionId, reenterLobbyAction);
+
+  if (!restartedLobbyView?.page || restartedLobbyView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after re-entering from reset.');
+  }
+
+  assert.equal(restartedLobbyView.page.nodeId, 'lobby_area');
+  assert.equal(
+    restartedLobbyView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_left'),
+    false,
+  );
+  assert.equal(
+    restartedLobbyView.offeredActions.some((action) => action.id === 'fixture:prototypehub_lobby_jukebox:step_away'),
+    false,
+  );
+});
+
+test('runtime api PrototypeHub jukebox enforces a per-machine queue limit', async () => {
+  const continueStore = new MemoryValueStore<PersistedContinueSessionState>();
+  const worldStateStore = new MemoryValueStore<PersistedProjectWorldState>();
+  const runtimeApi = createRuntimeApiService(new MemoryRuntimeStore(loadProjectFiles('PrototypeHub')), {
+    now: () => 0,
+    continueStore,
+    worldStateStore,
+  });
+
+  const gateView = await runtimeApi.createSession('PrototypeHub', { nodeId: 'outside_lobbygate' });
+
+  if (!gateView?.page || gateView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page.');
+  }
+
+  const openDoorAction = gateView.offeredActions.find((action) => action.id === 'open_prototypehub_door');
+
+  if (!openDoorAction) {
+    throw new Error('Expected offered action to open the PrototypeHub door.');
+  }
+
+  const openedDoorView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, openDoorAction);
+
+  if (!openedDoorView?.page || openedDoorView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub door page after opening the door.');
+  }
+
+  const enterLobbyAction = openedDoorView.offeredActions.find((action) => action.id === 'enter_prototypehub_lobby');
+
+  if (!enterLobbyAction) {
+    throw new Error('Expected offered action to enter the PrototypeHub lobby.');
+  }
+
+  const lobbyView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, enterLobbyAction);
+
+  if (!lobbyView?.page || lobbyView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after entering.');
+  }
+
+  const jukeboxAction = lobbyView.page.actions.find(
+    (action) => action.id === 'prototypehub_lobby_jukebox' && action.kind === 'poi',
+  );
+
+  if (!jukeboxAction) {
+    throw new Error('Expected PrototypeHub jukebox fixture action.');
+  }
+
+  const focusedJukeboxView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, jukeboxAction);
+
+  if (!focusedJukeboxView?.page || focusedJukeboxView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after focusing the jukebox.');
+  }
+
+  const swipeRightAction = focusedJukeboxView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:swipe_right',
+  );
+  const addFakeMoneyAction = focusedJukeboxView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:add_fake_money',
+  );
+  const queueSongAction = focusedJukeboxView.offeredActions.find(
+    (action) => action.id === 'fixture:prototypehub_lobby_jukebox:queue_song',
+  );
+
+  if (!swipeRightAction || !addFakeMoneyAction || !queueSongAction) {
+    throw new Error('Expected PrototypeHub jukebox controls after focusing the fixture.');
+  }
+
+  await runtimeApi.applySessionAction(gateView.snapshot.sessionId, swipeRightAction);
+  await runtimeApi.applySessionAction(gateView.snapshot.sessionId, swipeRightAction);
+  await runtimeApi.applySessionAction(gateView.snapshot.sessionId, addFakeMoneyAction);
+
+  const playingView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, queueSongAction);
+
+  if (!playingView?.page || playingView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after starting the first paid track.');
+  }
+
+  await runtimeApi.applySessionAction(gateView.snapshot.sessionId, swipeRightAction);
+
+  for (let index = 0; index < 20; index += 1) {
+    const creditedView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, addFakeMoneyAction);
+
+    if (!creditedView?.page || creditedView.page.kind !== 'page') {
+      throw new Error('Expected PrototypeHub lobby page after adding fake money to the queue.');
+    }
+
+    const queuedView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, queueSongAction);
+
+    if (!queuedView?.page || queuedView.page.kind !== 'page') {
+      throw new Error('Expected PrototypeHub lobby page after adding a queued song.');
+    }
+  }
+
+  const fullQueueMoneyView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, addFakeMoneyAction);
+
+  if (!fullQueueMoneyView?.page || fullQueueMoneyView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after hitting the queue limit with fake money.');
+  }
+
+  assert.equal(
+    ((fullQueueMoneyView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.queueTrackIds as string[] | undefined)?.length,
+    20,
+  );
+  assert.equal(
+    ((fullQueueMoneyView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.fakeCredits),
+    0,
+  );
+  assert.equal(
+    fullQueueMoneyView.page.recentLog?.some((entry) => entry.text.includes('queue is full at 20 songs')),
+    true,
+  );
+
+  const fullQueueSongView = await runtimeApi.applySessionAction(gateView.snapshot.sessionId, queueSongAction);
+
+  if (!fullQueueSongView?.page || fullQueueSongView.page.kind !== 'page') {
+    throw new Error('Expected PrototypeHub lobby page after trying to overfill the queue.');
+  }
+
+  assert.equal(
+    ((fullQueueSongView.snapshot.sessionState.objects as Record<string, Record<string, unknown>> | undefined)?.prototypehub_lobby_jukebox?.queueTrackIds as string[] | undefined)?.length,
+    20,
+  );
+  assert.equal(
+    fullQueueSongView.page.recentLog?.some((entry) => entry.text.includes('queue is full at 20 songs')),
+    true,
+  );
 });
 
 test('runtime api building03 upstairs ejects to the door when night falls without manual movement', async () => {

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildProjectRouteState } from './projectSession';
-import { buildVisibleBrowserPath, readAppRouteFromLocation } from './App';
+import { buildVisibleBrowserPath, readAppRouteFromLocation, readInitialAppRouteFromLocation, shouldRenderJukeboxPlayback } from './App';
 
 test('project routes stay hidden in the visible browser path', () => {
   assert.equal(buildVisibleBrowserPath({ kind: 'home' }), '/');
@@ -31,4 +31,54 @@ test('pathname parsing still handles admin and direct project links', () => {
     nodeId: 'building01_groundfloor',
     runNonce: 0,
   }));
+});
+
+test('initial load ignores stored hidden project navigation and falls back to the visible path', () => {
+  const projectRoute = buildProjectRouteState('demo04', {
+    nodeId: 'building01_groundfloor',
+    runNonce: 3,
+  });
+
+  assert.deepEqual(readInitialAppRouteFromLocation('/', { silofireRoute: projectRoute }), { kind: 'home' });
+  assert.deepEqual(readInitialAppRouteFromLocation('/admin', { silofireRoute: projectRoute }), { kind: 'admin_overview' });
+  assert.deepEqual(readInitialAppRouteFromLocation('/admin/projects/demo04', {
+    silofireRoute: { kind: 'admin_project', projectId: 'demo04' },
+  }), {
+    kind: 'admin_project',
+    projectId: 'demo04',
+  });
+});
+
+test('jukebox playback only renders on the PrototypeHub lobby area page', () => {
+  assert.equal(shouldRenderJukeboxPlayback('lobby_area', {
+    kind: 'page',
+    nodeId: 'lobby_area',
+    nodeKind: 'area',
+    title: 'Lobby',
+    proseBlocks: [],
+    recentLog: [],
+    actions: [],
+    controls: [],
+  }), true);
+  assert.equal(shouldRenderJukeboxPlayback('lobby_area', {
+    kind: 'page',
+    nodeId: 'lobby_area',
+    nodeKind: 'path',
+    title: 'Lobby Walk',
+    proseBlocks: [],
+    recentLog: [],
+    actions: [],
+    controls: [],
+  }), false);
+  assert.equal(shouldRenderJukeboxPlayback('title_screen', {
+    kind: 'page',
+    nodeId: 'title_screen',
+    nodeKind: 'area',
+    title: 'Title',
+    proseBlocks: [],
+    recentLog: [],
+    actions: [],
+    controls: [],
+  }), false);
+  assert.equal(shouldRenderJukeboxPlayback(undefined, undefined), false);
 });

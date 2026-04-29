@@ -209,6 +209,24 @@ test('runtime discovery builds playable demo and test01 projects from markdown f
   assert.equal(Object.keys(discoveredRuntime.test01?.pagesByNodeId ?? {}).length, 5);
 });
 
+test('runtime discovery can load the authored PrototypeHub project from disk', () => {
+  const prototypeRuntime = createRuntimeForContentFiles(loadProjectFiles('PrototypeHub'));
+
+  assert.equal(prototypeRuntime.PrototypeHub?.startNodeId, 'title_screen');
+  assert.equal(prototypeRuntime.PrototypeHub?.nodes.length, 4);
+  assert.equal(Object.keys(prototypeRuntime.PrototypeHub?.pagesByNodeId ?? {}).length, 4);
+
+  const gatePage = prototypeRuntime.PrototypeHub?.pagesByNodeId.outside_lobbygate;
+  const lobbyPage = prototypeRuntime.PrototypeHub?.pagesByNodeId.lobby_area;
+
+  assert.equal(gatePage?.kind, 'page');
+  assert.equal(lobbyPage?.kind, 'page');
+  assert.equal(
+    lobbyPage?.kind === 'page' && lobbyPage.actions.some((action) => action.id === 'prototypehub_lobby_jukebox' && action.kind === 'poi'),
+    true,
+  );
+});
+
 test('runtime node links prefer authored display names', () => {
   const fixtureRuntime = createRuntimeForContentFiles(contentFiles);
 

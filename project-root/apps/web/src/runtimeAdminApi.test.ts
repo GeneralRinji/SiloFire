@@ -6,6 +6,7 @@ import {
   getRuntimeAdminHeartProject,
   listRuntimeAdminHeartOverview,
   listRuntimeAdminSiteAnnouncements,
+  resetRuntimeAdminJukeboxProject,
 } from './runtimeAdminApi';
 
 test('runtime admin api sends the shared password header', async () => {
@@ -30,6 +31,10 @@ test('runtime admin api sends the shared password header', async () => {
 
     const siteResult = await listRuntimeAdminSiteAnnouncements('open-sesame');
     assert.equal(siteResult.kind, 'ok');
+    assert.equal(receivedHeader, 'open-sesame');
+
+    const jukeboxResetResult = await resetRuntimeAdminJukeboxProject('PrototypeHub', 'open-sesame');
+    assert.equal(jukeboxResetResult.kind, 'ok');
     assert.equal(receivedHeader, 'open-sesame');
   } finally {
     globalThis.fetch = originalFetch;

@@ -4,6 +4,7 @@ import type {
   ContentObject,
   ControlLabels,
   ExitReference,
+  FixtureReference,
   FlowBeatMarker,
   GateObject,
   PathDirection,
@@ -119,6 +120,7 @@ export function interpretAreaNode(
 
   if (options.includePois !== false) {
     actions.push(...(node.pois ?? []).map(toInterpretedPoiAction));
+    actions.push(...(node.fixtures ?? []).map(toInterpretedFixtureAction));
   }
 
   if (options.includeChoices !== false) {
@@ -409,6 +411,15 @@ function toInterpretedPoiAction(poi: PoiReference): InterpretedAction {
     kind: 'poi',
     label: poi.displayName,
     key: poi.key,
+  };
+}
+
+function toInterpretedFixtureAction(fixture: FixtureReference): InterpretedAction {
+  return {
+    id: fixture.id,
+    kind: 'poi',
+    label: fixture.displayName,
+    key: fixture.key,
   };
 }
 

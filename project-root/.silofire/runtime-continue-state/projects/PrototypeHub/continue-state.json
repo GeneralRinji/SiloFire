@@ -1,0 +1,158 @@
+{
+  "projectId": "PrototypeHub",
+  "route": {
+    "nodeId": "lobby_area",
+    "runNonce": 2
+  },
+  "areaVisitCounts": {
+    "title_screen": 1,
+    "outside_area": 1,
+    "outside_lobbygate": 1,
+    "lobby_area": 1
+  },
+  "pathVisitCounts": {},
+  "recentLogByNodeId": {
+    "outside_area": [
+      {
+        "id": "time-pbalnu8w",
+        "text": "Daylight makes the narrow frontage look more experimental than commercial.",
+        "lane": "recent",
+        "blocks": [
+          {
+            "groupId": "time",
+            "kind": "paragraph",
+            "text": "Daylight makes the narrow frontage look more experimental than commercial."
+          }
+        ]
+      }
+    ],
+    "outside_lobbygate": [
+      {
+        "id": "log-yks7ey9r",
+        "text": "The door is shut right now.",
+        "lane": "recent",
+        "blocks": [
+          {
+            "groupId": "actor",
+            "kind": "paragraph",
+            "text": "The door is shut right now."
+          }
+        ]
+      },
+      {
+        "id": "log-a456tdi9",
+        "text": "You pull the door open. The conversation inside sharpens for a second, then blurs back into room tone.",
+        "lane": "visible",
+        "blocks": [
+          {
+            "groupId": "actor",
+            "kind": "paragraph",
+            "text": "You pull the door open. The conversation inside sharpens for a second, then blurs back into room tone."
+          }
+        ]
+      }
+    ],
+    "lobby_area": [
+      {
+        "id": "prototypehub:door:closed:1777433232272",
+        "text": "The door swings shut.",
+        "lane": "recent"
+      },
+      {
+        "id": "log-4mgtdwmn",
+        "text": "Jukebox is already spinning **Audio Slave** by Unknown Patron.",
+        "lane": "recent"
+      },
+      {
+        "id": "jukebox:atmosphere:song_audio_slave_001:1:1777433239712",
+        "text": "The jukebox obeys with suspicious enthusiasm.",
+        "lane": "recent"
+      },
+      {
+        "id": "log-mb47ioh5",
+        "text": "The jukebox catches the motion near its controls and wakes itself with **Never Gonna Give You Up** by Rick Astley.",
+        "lane": "recent"
+      },
+      {
+        "id": "time-azu7domt",
+        "text": "The neon wins its argument with the fading light and turns the window into a soft electrical bruise.",
+        "lane": "recent",
+        "blocks": [
+          {
+            "groupId": "time",
+            "kind": "paragraph",
+            "text": "The neon wins its argument with the fading light and turns the window into a soft electrical bruise."
+          }
+        ]
+      },
+      {
+        "id": "time-wydcsb7d",
+        "text": "Night presses the chatter behind the glass a little closer to the street.",
+        "lane": "recent",
+        "blocks": [
+          {
+            "groupId": "time",
+            "kind": "paragraph",
+            "text": "Night presses the chatter behind the glass a little closer to the street."
+          }
+        ]
+      }
+    ]
+  },
+  "actionAttemptsByNodeId": {
+    "title_screen": {
+      "exit:start_prototype_hub": 1
+    },
+    "outside_area": {
+      "exit:approach_lobby_door": 1
+    },
+    "outside_lobbygate": {
+      "choice:open_prototypehub_door": 1,
+      "choice:enter_prototypehub_lobby": 1
+    },
+    "lobby_area": {
+      "poi:prototypehub_lobby_jukebox": 2
+    }
+  },
+  "sessionState": {
+    "objects": {
+      "prototypehub_lobby_door": {
+        "open": false,
+        "openedAtMs": 0
+      },
+      "prototypehub_lobby_jukebox": {
+        "browseIndex": 11,
+        "fakeCredits": 0,
+        "currentTrack": "none",
+        "currentTrackLabel": "",
+        "currentTrackMode": "",
+        "currentTrackStartedAtMs": 0,
+        "currentTrackEndsAtMs": 0,
+        "lobbyAtmosphereTrackId": "",
+        "lobbyAtmosphereTick": 0,
+        "queueTrackIds": []
+      }
+    },
+    "world": {
+      "time": {
+        "phase": "night",
+        "cycle": [
+          "day",
+          "dusk",
+          "night",
+          "dawn"
+        ],
+        "nowMs": 1777433431820,
+        "source": "preview-local"
+      }
+    },
+    "player": {
+      "location": "lobby_area",
+      "active": {
+        "location": "lobby_area"
+      }
+    },
+    "npcs": {}
+  },
+  "savedAt": 1777433431823
+}

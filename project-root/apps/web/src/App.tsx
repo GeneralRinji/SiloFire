@@ -7,7 +7,15 @@ import { findMatchingShortcut, isEditableTarget } from './keyboardShortcuts';
 import { buildProjectedPageRenderKey } from './pageSelection';
 import { buildProjectRouteState, type ProjectRouteState } from './projectSession';
 import { createServerRuntimeAmbientSource, type RuntimeAmbientNpcSnapshot } from './runtimeAmbient';
-import { applyRuntimeSessionAction, applyRuntimeSessionControl, createRuntimeSession, getRuntimeSession, resetRuntimeSession, type RuntimeSessionView } from './runtimeSessionApi';
+import {
+  applyRuntimeSessionAction,
+  applyRuntimeSessionControl,
+  createRuntimeSession,
+  createServerRuntimeSessionSource,
+  getRuntimeSession,
+  resetRuntimeSession,
+  type RuntimeSessionView,
+} from './runtimeSessionApi';
 import { createServerRuntimeWeatherSource, type RuntimeWeatherProjectSnapshot } from './runtimeWeather';
 import {
   createRuntimeAdminSiteAnnouncement,
@@ -16,6 +24,7 @@ import {
   listRuntimeAdminHeartOverview,
   listRuntimeAdminSiteAnnouncements,
   resetRuntimeAdminHeartProject,
+  resetRuntimeAdminJukeboxProject,
   updateRuntimeAdminSiteAnnouncement,
 } from './runtimeAdminApi';
 import { setRuntimeHeart } from './runtimeHeartApi';
@@ -24,6 +33,7 @@ import { createServerRuntimeSiteAnnouncementSource, getRuntimeSiteAnnouncementSn
 import { AdminGateScreen, AdminOverviewScreen, AdminProjectScreen } from './components/AdminScreen';
 import { HomeScreen } from './components/HomeScreen';
 import { ProjectScreen, type ProjectNodeLink } from './components/ProjectScreen';
+import { findActiveJukeboxPlayback } from './jukeboxPlayback';
 import { SiteAnnouncementStack } from './components/SiteAnnouncementStack';
 import type {
   AdminSiteAnnouncementSnapshot,
@@ -36,6 +46,7 @@ import type {
 const SERVER_RUNTIME_CLOCK_SOURCE = createServerRuntimeClockSource();
 const SERVER_RUNTIME_AMBIENT_SOURCE = createServerRuntimeAmbientSource();
 const SERVER_RUNTIME_WEATHER_SOURCE = createServerRuntimeWeatherSource();
+const SERVER_RUNTIME_SESSION_SOURCE = createServerRuntimeSessionSource();
 const SERVER_RUNTIME_SITE_ANNOUNCEMENT_SOURCE = createServerRuntimeSiteAnnouncementSource();
 const ADMIN_PASSWORD_STORAGE_KEY = 'silofire.admin.password';
 const IS_LOCAL_DEV = typeof window !== 'undefined'
@@ -95,7 +106,7 @@ export function App() {
     }
 
     const onPopState = () => {
-      setRouteState(readInitialAppRoute());
+      setRouteState(readAppRouteFromLocation(window.location.pathname, window.history.state));
     };
 
     window.addEventListener('popstate', onPopState);
@@ -280,6 +291,28 @@ export function App() {
   }, [route.kind, route.kind === 'project' ? route.projectId : undefined, activeRuntimeSessionSnapshot?.projectId, activeRuntimeSessionSnapshot?.sessionId]);
 
   useEffect(() => {
+    if (route.kind !== 'project' || !activeRuntimeSessionSnapshot) {
+      return undefined;
+    }
+
+    return SERVER_RUNTIME_SESSION_SOURCE.subscribeSession(activeRuntimeSessionSnapshot.sessionId, {
+      onUpdate(sessionView) {
+        if (
+          sessionView.snapshot.sessionId !== activeRuntimeSessionSnapshot.sessionId
+          || sessionView.snapshot.projectId !== route.projectId
+        ) {
+          return;
+        }
+
+        applyRuntimeSessionView(route.projectId, sessionView);
+      },
+      onError(error) {
+        console.error(error);
+      },
+    });
+  }, [route.kind, route.kind === 'project' ? route.projectId : undefined, activeRuntimeSessionSnapshot?.sessionId]);
+
+  useEffect(() => {
     if (route.kind !== 'project') {
       return undefined;
     }
@@ -334,6 +367,7 @@ export function App() {
       })
     : [];
   const currentSessionState = activeRuntimeSessionSnapshot?.sessionState;
+  const currentSessionNowMs = readSessionNowMs(currentSessionState);
   const sessionNpcStateById = currentSessionState?.npcs && typeof currentSessionState.npcs === 'object' && !Array.isArray(currentSessionState.npcs)
     ? Object.fromEntries(
         Object.entries(currentSessionState.npcs).map(([npcId, value]) => {
@@ -371,6 +405,8 @@ export function App() {
       )
     : undefined;
   const selectedPage = activeRuntimeSessionView?.page;
+  const activeJukeboxPlayback = findActiveJukeboxPlayback(sessionObjectStateById, currentSessionNowMs);
+  const isJukeboxPlaybackVisible = shouldRenderJukeboxPlayback(currentNodeId, selectedPage);
   const offeredActions = activeRuntimeSessionView?.offeredActions ?? [];
   const fullyEffectiveSelectedPage = appendOfferedActions(selectedPage, offeredActions);
   const selectedPageRenderKey = buildProjectedPageRenderKey({
@@ -468,7 +504,7 @@ export function App() {
   }
 
   async function refreshProjectSession(projectId: string, sessionId: string) {
-    const mutationVersion = beginProjectMutation(projectId);
+    const mutationVersion = projectMutationVersionRef.current[projectId] ?? 0;
     const sessionView = await getRuntimeSession(sessionId);
 
     if (sessionView && isLatestProjectMutation(projectId, mutationVersion)) {
@@ -486,6 +522,14 @@ export function App() {
     }
 
     applyRuntimeSessionView(nextProjectId, sessionView);
+  }
+
+  async function handleJukeboxPlaybackEnded() {
+    if (!projectId || !activeRuntimeSessionSnapshot) {
+      return;
+    }
+
+    await refreshProjectSession(projectId, activeRuntimeSessionSnapshot.sessionId);
   }
 
   function applyAppRoute(nextRoute: AppRoute, historyMode: 'push' | 'replace' = 'push') {
@@ -538,6 +582,24 @@ export function App() {
     }
 
     const result = await resetRuntimeAdminHeartProject(projectId, adminPassword);
+
+    if (result.kind === 'unauthorized') {
+      signOutAdmin();
+      setAdminGateErrorText('Password rejected by server.');
+      return;
+    }
+
+    if (result.kind === 'ok') {
+      setAdminRevision((current) => current + 1);
+    }
+  }
+
+  async function handleAdminJukeboxReset(projectId: string) {
+    if (!adminPassword) {
+      return;
+    }
+
+    const result = await resetRuntimeAdminJukeboxProject(projectId, adminPassword);
 
     if (result.kind === 'unauthorized') {
       signOutAdmin();
@@ -692,6 +754,9 @@ export function App() {
           onResetHearts={() => {
             void handleAdminHeartReset(route.projectId);
           }}
+          onResetJukebox={() => {
+            void handleAdminJukeboxReset(route.projectId);
+          }}
           onSignOut={signOutAdmin}
         />,
       );
@@ -764,6 +829,9 @@ export function App() {
       activeAmbientNpcs={activeAmbientNpcs}
       sessionNpcStateById={sessionNpcStateById}
       sessionObjectStateById={sessionObjectStateById}
+      jukeboxPlayback={activeJukeboxPlayback}
+      jukeboxPlaybackVisible={isJukeboxPlaybackVisible}
+      onJukeboxPlaybackEnded={handleJukeboxPlaybackEnded}
       onBackHome={() => applyAppRoute({ kind: 'home' })}
       onResetRun={() => {
         if (!projectId || !activeRuntimeSessionSnapshot) {
@@ -807,7 +875,17 @@ function readInitialAppRoute(): AppRoute {
     return { kind: 'home' };
   }
 
-  return readAppRouteFromLocation(window.location.pathname, window.history.state);
+  return readInitialAppRouteFromLocation(window.location.pathname, window.history.state);
+}
+
+export function readInitialAppRouteFromLocation(pathname: string, historyState: unknown): AppRoute {
+  const storedRoute = readStoredAppRoute(historyState);
+
+  if (storedRoute && storedRoute.kind !== 'project') {
+    return storedRoute;
+  }
+
+  return parseAppRoutePath(pathname);
 }
 
 export function readAppRouteFromLocation(pathname: string, historyState: unknown): AppRoute {
@@ -955,6 +1033,26 @@ function getOptionalStringValue(record: object, key: string): string | undefined
 function getOptionalNumberValue(record: object, key: string): number | undefined {
   const value = (record as Record<string, unknown>)[key];
   return typeof value === 'number' ? value : undefined;
+}
+
+function readSessionNowMs(sessionState: unknown): number | undefined {
+  const worldState = sessionState && typeof sessionState === 'object'
+    ? (sessionState as { world?: unknown }).world
+    : undefined;
+  const timeState = worldState && typeof worldState === 'object'
+    ? (worldState as { time?: unknown }).time
+    : undefined;
+  const nowMs = timeState && typeof timeState === 'object'
+    ? (timeState as { nowMs?: unknown }).nowMs
+    : undefined;
+
+  return typeof nowMs === 'number' && Number.isFinite(nowMs) ? nowMs : undefined;
+}
+
+export function shouldRenderJukeboxPlayback(nodeId: string | undefined, page: ProjectionResult | undefined): boolean {
+  return nodeId === 'lobby_area'
+    && page?.kind === 'page'
+    && page.nodeKind === 'area';
 }
 
 function appendOfferedActions(

@@ -123,6 +123,41 @@ Hello.
   assert.equal(result.value?.titleScreen?.saveMode, 'single');
 });
 
+test('parseAreaToSchema preserves typed fixtures for area nodes', () => {
+  const result = parseAreaToSchema(`---
+version: 1
+templateSchema: area
+templateSchemaVersion: 1
+
+id: fixture_area
+displayName: Fixture Area
+region: system
+
+fixtures:
+  - id: lobby_jukebox
+    kind: jukebox
+    displayName: Lobby Jukebox
+    key: J
+    stateId: lobby_jukebox
+    maxQueueLength: 20
+    defaultTrackId: house_mix
+    defaultTrackLabel: House Mix
+---
+
+# Fixture Area
+
+## enter
+Hello.
+`);
+
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.value?.fixtures?.length, 1);
+  assert.equal(result.value?.fixtures?.[0]?.kind, 'jukebox');
+  assert.equal(result.value?.fixtures?.[0]?.stateId, 'lobby_jukebox');
+  assert.equal(result.value?.fixtures?.[0]?.maxQueueLength, 20);
+  assert.equal(result.value?.fixtures?.[0]?.defaultTrackLabel, 'House Mix');
+});
+
 test('parseAreaDocument reports malformed front matter delimiters', () => {
   const malformedFrontMatterSample = `---
 version: 1

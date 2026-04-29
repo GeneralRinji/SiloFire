@@ -26,6 +26,7 @@ export type ProjectedTextLane = 'visible' | 'recent';
 export interface ProjectedLogEntry {
   id: string;
   text: string;
+  scope?: string;
   lane?: ProjectedTextLane;
   markers?: ProjectedMarker[];
   blocks?: ProjectedProseBlock[];
@@ -160,6 +161,7 @@ function projectRecentLog(entries: InterpretedLogEntry[] | undefined): Projected
   return entries.map((entry) => ({
     id: entry.id,
     text: entry.text,
+    scope: entry.scope,
     lane: 'recent',
   }));
 }

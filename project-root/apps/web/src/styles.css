@@ -794,6 +794,10 @@ select {
   .admin-screen__project-metrics {
     justify-items: start;
   }
+
+  .jukebox-airplay__viewport {
+    width: 100%;
+  }
 }
 
 .hero-header {
@@ -938,6 +942,55 @@ select {
   justify-items: start;
   gap: 0.45rem;
   margin-top: 0.75rem;
+}
+
+.terminal-block--jukebox-airplay {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.terminal-block--jukebox-airplay-hidden {
+  display: none;
+}
+
+.jukebox-airplay__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.jukebox-airplay__header .terminal-label {
+  margin-bottom: 0;
+}
+
+.jukebox-airplay__viewport {
+  position: relative;
+  width: 168px;
+  max-width: 100%;
+  aspect-ratio: 14 / 8;
+  border: 1px dashed rgba(73, 255, 128, 0.22);
+  background:
+    linear-gradient(180deg, rgba(73, 255, 128, 0.03), rgba(0, 0, 0, 0.16)),
+    rgba(0, 0, 0, 0.24);
+  overflow: hidden;
+}
+
+.jukebox-airplay__player,
+.jukebox-airplay__player iframe {
+  width: 100%;
+  height: 100%;
+}
+
+.jukebox-airplay__player iframe {
+  opacity: 0.17;
+  filter: saturate(0.55) brightness(0.62);
+  pointer-events: none;
+}
+
+.jukebox-airplay__viewport:hover .jukebox-airplay__player iframe,
+.jukebox-airplay__viewport:focus-within .jukebox-airplay__player iframe {
+  opacity: 0.32;
 }
 
 .terminal-status-callout {
