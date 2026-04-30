@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
-import type { ProjectedAction, ProjectedControl, ProjectedLogEntry, ProjectedMarker, ProjectedProseBlock, ProjectionResult } from '../../../projection/src';
+import type { ProjectedAction, ProjectedControl, ProjectedFixturePanel, ProjectedLogEntry, ProjectedMarker, ProjectedProseBlock, ProjectionResult } from '../../../projection/src';
 import { NodeNavigation } from './NodeNavigation';
 import { PageShell } from './PageShell';
 import { getFadePresentation } from './fadeMarker';
@@ -69,6 +69,8 @@ export function ProjectedPageView({ page, navigationKey, footerPane, onAction, o
           ) : null}
         </section>
 
+        {page.fixturePanels?.map((panel) => <FixturePanel key={panel.id} panel={panel} />)}
+
         <NodeNavigation
           page={page}
           onAction={onAction}
@@ -81,6 +83,44 @@ export function ProjectedPageView({ page, navigationKey, footerPane, onAction, o
       </div>
     </PageShell>
   );
+}
+
+function FixturePanel({ panel }: { panel: ProjectedFixturePanel }) {
+  return (
+    <section className="panel-stack__section fixture-panel">
+      <header className="section-header">
+        <span className="section-header__rule" aria-hidden="true" />
+        <h2>{panel.title}</h2>
+      </header>
+
+      {panel.subtitle ? <p className="fixture-panel__subtitle">{panel.subtitle}</p> : null}
+
+      <div className="fixture-panel__sections">
+        {panel.sections.map((section) => (
+          <section key={section.id} className="fixture-panel__section">
+            {section.title ? <p className="fixture-panel__section-title">{section.title}</p> : null}
+            <div className={getFixturePanelBlocksClassName(section.id, section.blocks.length)}>
+              {section.blocks.map((block, index) => (
+                <div key={`${section.id}-${index}`} className="recent-log__block recent-log__block--group-start">
+                  {renderRichText(block.text)}
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function getFixturePanelBlocksClassName(sectionId: string, blockCount: number): string {
+  const classNames = ['fixture-panel__blocks'];
+
+  if (sectionId === 'queue' && blockCount > 5) {
+    classNames.push('fixture-panel__blocks--scrollable');
+  }
+
+  return classNames.join(' ');
 }
 
 function getNavigationBaseDelayMs(blocks: ProjectedProseBlock[]): number {

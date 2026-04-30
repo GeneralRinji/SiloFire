@@ -6,6 +6,8 @@ It is not a stable architecture contract.
 
 It is a current-state implementation note for future refactor work.
 
+For the target architecture that separates shared fixture state, private interaction context, and audience-aware text projection, see `AudienceAndFixtureContextsV1.md`.
+
 If this file disagrees with verified code behavior, trust the code first and then update this note.
 
 ## Why This Exists

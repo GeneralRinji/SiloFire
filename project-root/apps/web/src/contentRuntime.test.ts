@@ -2536,9 +2536,15 @@ players:
   assert.equal(outcome.nextNodeId, undefined);
   assert.equal(outcome.logEntry?.text, 'You take the vase and turn it over in your hands.');
   assert.equal(outcome.logEntry?.lane, 'recent');
+  assert.deepEqual(outcome.projectionEmissions?.map((emission) => ({ audience: emission.audience.kind, text: emission.text })), [
+    { audience: 'actor', text: 'You take the vase and turn it over in your hands.' },
+    { audience: 'actor', text: 'Another cheap clay imitation. There are too many of those on this block.' },
+    { audience: 'witnesses', text: 'Rowan Vale takes the vase and turns it over in their hands.' },
+    { audience: 'witnesses', text: 'Rowan Vale sighs after a brief inspection.' },
+  ]);
   assert.deepEqual(outcome.logEntry?.blocks?.map((block) => ({ groupId: block.groupId, text: block.text })), [
     { groupId: 'actor', text: 'You take the vase and turn it over in your hands.' },
-    { groupId: 'private', text: 'Another cheap clay imitation. There are too many of those on this block.' },
+    { groupId: 'actor-detail', text: 'Another cheap clay imitation. There are too many of those on this block.' },
   ]);
   assert.equal(outcome.eventResult?.actorId, 'player_01');
   assert.deepEqual(outcome.eventResult?.witnesses?.text, [
@@ -2828,7 +2834,7 @@ players:
   assert.equal(outcome.logEntry?.lane, 'visible');
   assert.deepEqual(outcome.logEntry?.blocks?.map((block) => ({ groupId: block.groupId, text: block.text })), [
     { groupId: 'actor', text: 'You rotate the vase until the chipped side faces the wall.' },
-    { groupId: 'private', text: 'It changes nothing important, but the room looks slightly less careless.' },
+    { groupId: 'actor-detail', text: 'It changes nothing important, but the room looks slightly less careless.' },
   ]);
   assert.equal(outcome.sessionState?.objects?.vase_01?.aligned, true);
   assert.equal(outcome.sessionState?.objects?.vase_01?.last_aligned_by, 'player_01');

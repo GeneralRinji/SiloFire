@@ -38,12 +38,15 @@ import {
   normalizeSessionStateForPersistedContinue,
   normalizeSessionStateForPersistedWorldState,
   type CreateRuntimeSessionOptions,
+  type RuntimeSessionActionResult,
   type RuntimeSessionProjectMetadata,
+  type RuntimeSessionProjectionEmissionBatch,
   type RuntimeSessionService,
   type RuntimeSessionSnapshot,
   type RuntimeSessionView,
 } from './runtimeSessionService';
 import type { ProjectedAction, ProjectedControl, ProjectedLogEntry } from '../../projection/src';
+import type { RuntimeProjectionAudience, RuntimeProjectionDelivery, RuntimeProjectionEmission } from '../../runtime/src';
 import { JUKEBOX_CATALOGS, type JukeboxCatalogSong } from '../../runtime/src/jukeboxCatalogs';
 
 export * from './runtimeSessionService';
@@ -113,7 +116,7 @@ export interface RuntimeApiService {
   resetSession(sessionId: string, destinationNodeId?: string): Promise<RuntimeSessionView | undefined>;
 }
 
-export interface PersistedContinueSessionState extends Omit<RuntimeSessionSnapshot, 'sessionId'> {
+export interface PersistedContinueSessionState extends Omit<RuntimeSessionSnapshot, 'sessionId' | 'fixtureInteractionStateById'> {
   savedAt: number;
 }
 
@@ -379,6 +382,8 @@ export function createRuntimeApiService(
   const runtimeSessionServicesBySessionId = new Map<string, RuntimeSessionService>();
   const sessionProjectIdsBySessionId = new Map<string, string>();
   const pendingRuntimeOperationByProjectId = new Map<string, Promise<void>>();
+  let nextRuntimeSessionId = 1;
+  let nextProjectionEmissionLogId = 1;
   const lastObservedTimeBySessionId = new Map<string, { nodeId?: string; snapshot?: RuntimeTimeSnapshot }>();
   const lastObservedWeatherBySessionId = new Map<string, { nodeId?: string; snapshot?: RuntimeWeatherSnapshot }>();
   const lastObservedAmbientBySessionId = new Map<string, Record<string, RuntimeAmbientNpcSnapshot>>();
@@ -583,67 +588,74 @@ export function createRuntimeApiService(
       return found;
     },
     async resetProjectJukeboxes(projectId) {
-      const savedAt = now();
-      const activeSessionIds: string[] = [];
-      const persistedWorldState = await worldStateStore.get(projectWorldStateKey(projectId));
-      const persistedContinueState = await getPersistedContinueState(continueStore, projectId);
-      const resetWorldState = persistedWorldState
-        ? resetJukeboxObjectState(persistedWorldState.sessionState)
-        : undefined;
-      const resetContinueSessionState = persistedContinueState
-        ? resetJukeboxObjectState(persistedContinueState.sessionState)
-        : undefined;
-      const resetContinueRecentLog = persistedContinueState
-        ? stripJukeboxQueueEntries(persistedContinueState.recentLogByNodeId)
-        : undefined;
+      return runProjectOperation(projectId, async () => {
+        const savedAt = now();
+        const activeSessionIds: string[] = [];
+        const persistedWorldState = await worldStateStore.get(projectWorldStateKey(projectId));
+        const persistedContinueState = await getPersistedContinueState(continueStore, projectId);
+        const resetWorldState = persistedWorldState
+          ? resetJukeboxObjectState(persistedWorldState.sessionState)
+          : undefined;
+        const resetContinueSessionState = persistedContinueState
+          ? resetJukeboxObjectState(persistedContinueState.sessionState)
+          : undefined;
+        const resetContinueRecentLog = persistedContinueState
+          ? stripJukeboxQueueEntries(persistedContinueState.recentLogByNodeId)
+          : undefined;
 
-      if (persistedWorldState && resetWorldState?.changed) {
-        await worldStateStore.set(projectWorldStateKey(projectId), {
-          ...persistedWorldState,
-          sessionState: normalizeSessionStateForPersistedWorldState(resetWorldState.sessionState),
-          savedAt,
-        });
-      }
-
-      if (persistedContinueState && (resetContinueSessionState?.changed || resetContinueRecentLog?.changed)) {
-        await continueStore.set(projectContinueStateKey(projectId), {
-          ...persistedContinueState,
-          sessionState: normalizeSessionStateForPersistedContinue(
-            resetContinueSessionState?.sessionState ?? persistedContinueState.sessionState,
-          ),
-          recentLogByNodeId: resetContinueRecentLog?.recentLogByNodeId ?? persistedContinueState.recentLogByNodeId,
-          savedAt,
-        });
-        await continueStore.delete(legacyProjectSnapshotKey(projectId));
-      }
-
-      for (const [sessionId, sessionProjectId] of sessionProjectIdsBySessionId.entries()) {
-        if (sessionProjectId !== projectId) {
-          continue;
+        if (persistedWorldState && resetWorldState?.changed) {
+          await worldStateStore.set(projectWorldStateKey(projectId), {
+            ...persistedWorldState,
+            sessionState: normalizeSessionStateForPersistedWorldState(resetWorldState.sessionState),
+            savedAt,
+          });
         }
 
-        const runtimeSessionService = runtimeSessionServicesBySessionId.get(sessionId);
-        const currentSessionView = runtimeSessionService?.getSession(sessionId);
-
-        if (!runtimeSessionService || !currentSessionView) {
-          continue;
+        if (persistedContinueState && (resetContinueSessionState?.changed || resetContinueRecentLog?.changed)) {
+          await continueStore.set(projectContinueStateKey(projectId), {
+            ...persistedContinueState,
+            sessionState: normalizeSessionStateForPersistedContinue(
+              resetContinueSessionState?.sessionState ?? persistedContinueState.sessionState,
+            ),
+            recentLogByNodeId: buildPersistedContinueRecentLogByNodeId(
+              resetContinueRecentLog?.recentLogByNodeId ?? persistedContinueState.recentLogByNodeId,
+            ),
+            actionAttemptsByNodeId: buildPersistedContinueActionAttemptsByNodeId(
+              persistedContinueState.actionAttemptsByNodeId,
+            ),
+            savedAt,
+          });
+          await continueStore.delete(legacyProjectSnapshotKey(projectId));
         }
 
-        const resetSnapshot = resetJukeboxSnapshot(currentSessionView.snapshot);
+        for (const [sessionId, sessionProjectId] of sessionProjectIdsBySessionId.entries()) {
+          if (sessionProjectId !== projectId) {
+            continue;
+          }
 
-        if (!resetSnapshot.changed) {
-          continue;
+          const runtimeSessionService = runtimeSessionServicesBySessionId.get(sessionId);
+          const currentSessionView = runtimeSessionService?.getSession(sessionId);
+
+          if (!runtimeSessionService || !currentSessionView) {
+            continue;
+          }
+
+          const resetSnapshot = resetJukeboxSnapshot(currentSessionView.snapshot);
+
+          if (!resetSnapshot.changed) {
+            continue;
+          }
+
+          const { sessionId: ignoredSessionId, ...replacementSnapshot } = resetSnapshot.snapshot;
+          void ignoredSessionId;
+
+          if (runtimeSessionService.replaceSession(sessionId, replacementSnapshot)) {
+            activeSessionIds.push(sessionId);
+          }
         }
 
-        const { sessionId: ignoredSessionId, ...replacementSnapshot } = resetSnapshot.snapshot;
-        void ignoredSessionId;
-
-        if (runtimeSessionService.replaceSession(sessionId, replacementSnapshot)) {
-          activeSessionIds.push(sessionId);
-        }
-      }
-
-      return activeSessionIds;
+        return activeSessionIds;
+      });
     },
     async getClockSnapshot(projectId, nodeId, nodeRegion) {
       const runtimeSessionService = await createFreshRuntimeSessionService(projectId);
@@ -763,10 +775,16 @@ export function createRuntimeApiService(
           return decorateAndPersistSessionView(freshRuntimeSessionService, sessionView);
         }
 
-        const sessionView = runtimeSessionService.applyAction(sessionId, action);
+        const currentSessionView = runtimeSessionService.getSession(sessionId);
+        const actionResult = runtimeSessionService.applyActionDetailed(sessionId, action);
+        const sessionView = actionResult?.sessionView;
 
         if (sessionView && runtimeSessionService) {
           rememberSession(sessionView.snapshot.projectId, sessionView.snapshot.sessionId, runtimeSessionService, sessionId);
+        }
+
+        if (projectId && currentSessionView && actionResult?.projectionEmissionBatches.length) {
+          await fanOutProjectionEmissionBatches(projectId, sessionId, actionResult);
         }
 
         return decorateAndPersistSessionView(runtimeSessionService, sessionView);
@@ -811,6 +829,7 @@ export function createRuntimeApiService(
           pathVisitCounts: currentSessionView.snapshot.pathVisitCounts,
           recentLogByNodeId: currentSessionView.snapshot.recentLogByNodeId,
           actionAttemptsByNodeId: currentSessionView.snapshot.actionAttemptsByNodeId,
+          fixtureInteractionStateById: currentSessionView.snapshot.fixtureInteractionStateById,
           sessionState: currentSessionView.snapshot.sessionState,
         });
 
@@ -832,6 +851,195 @@ export function createRuntimeApiService(
 
   async function getRuntimeSessionServiceForSession(sessionId: string): Promise<RuntimeSessionService | undefined> {
     return runtimeSessionServicesBySessionId.get(sessionId);
+  }
+
+  async function fanOutProjectionEmissionBatches(
+    projectId: string,
+    actorSessionId: string,
+    actionResult: RuntimeSessionActionResult,
+  ): Promise<void> {
+    for (const [recipientSessionId, recipientProjectId] of sessionProjectIdsBySessionId.entries()) {
+      if (recipientProjectId !== projectId || recipientSessionId === actorSessionId) {
+        continue;
+      }
+
+      const runtimeSessionService = runtimeSessionServicesBySessionId.get(recipientSessionId);
+      const currentSessionView = runtimeSessionService?.getSession(recipientSessionId);
+
+      if (!runtimeSessionService || !currentSessionView) {
+        continue;
+      }
+
+      const currentNodeId = currentSessionView.snapshot.route.nodeId;
+
+      if (!currentNodeId) {
+        continue;
+      }
+
+      const viewerId = getActivePlayerId(currentSessionView.snapshot.sessionState);
+      let nextRecentLogByNodeId = currentSessionView.snapshot.recentLogByNodeId;
+      let changed = false;
+
+      for (const batch of actionResult.projectionEmissionBatches) {
+        if (batch.nodeId !== currentNodeId) {
+          continue;
+        }
+
+        const visibleEmissions = batch.emissions.filter((emission) => matchesProjectionAudienceForViewer(emission.audience, viewerId));
+
+        if (visibleEmissions.length === 0) {
+          continue;
+        }
+
+        nextRecentLogByNodeId = applyProjectionEmissionBatchToRecentLog(nextRecentLogByNodeId, currentNodeId, visibleEmissions);
+        changed = true;
+      }
+
+      if (!changed) {
+        continue;
+      }
+
+      runtimeSessionService.replaceSession(recipientSessionId, {
+        projectId: currentSessionView.snapshot.projectId,
+        route: currentSessionView.snapshot.route,
+        areaVisitCounts: currentSessionView.snapshot.areaVisitCounts,
+        pathVisitCounts: currentSessionView.snapshot.pathVisitCounts,
+        recentLogByNodeId: nextRecentLogByNodeId,
+        actionAttemptsByNodeId: currentSessionView.snapshot.actionAttemptsByNodeId,
+        fixtureInteractionStateById: currentSessionView.snapshot.fixtureInteractionStateById,
+        sessionState: currentSessionView.snapshot.sessionState,
+      });
+    }
+  }
+
+  function applyProjectionEmissionBatchToRecentLog(
+    recentLogByNodeId: RuntimeSessionSnapshot['recentLogByNodeId'],
+    nodeId: string,
+    emissions: RuntimeProjectionEmission[],
+  ): RuntimeSessionSnapshot['recentLogByNodeId'] {
+    let nextRecentLogByNodeId = recentLogByNodeId;
+    const emissionGroups = groupProjectionEmissionsByDelivery(emissions);
+
+    for (const emissionGroup of emissionGroups) {
+      const delivery = emissionGroup[0]?.delivery;
+
+      if (!delivery) {
+        continue;
+      }
+
+      const entry = createProjectionEmissionLogEntry(emissionGroup, delivery);
+      const existingEntries = nextRecentLogByNodeId[nodeId] ?? [];
+
+      if (delivery.kind === 'append') {
+        nextRecentLogByNodeId = appendRecentLogEntry(nextRecentLogByNodeId, nodeId, entry);
+        continue;
+      }
+
+      nextRecentLogByNodeId = {
+        ...nextRecentLogByNodeId,
+        [nodeId]: [
+          ...existingEntries.filter((existingEntry) => existingEntry.scope !== delivery.scope),
+          entry,
+        ],
+      };
+    }
+
+    return nextRecentLogByNodeId;
+  }
+
+  function groupProjectionEmissionsByDelivery(
+    emissions: RuntimeProjectionEmission[],
+  ): RuntimeProjectionEmission[][] {
+    const groups = new Map<string, RuntimeProjectionEmission[]>();
+
+    for (const emission of emissions) {
+      const key = `${emission.delivery.kind}:${'scope' in emission.delivery ? emission.delivery.scope : ''}:${emission.lane}`;
+      const current = groups.get(key) ?? [];
+      current.push(emission);
+      groups.set(key, current);
+    }
+
+    return Array.from(groups.values());
+  }
+
+  function createProjectionEmissionLogEntry(
+    emissions: RuntimeProjectionEmission[],
+    delivery: RuntimeProjectionDelivery,
+  ): ProjectedLogEntry {
+    const blocks = emissions.map((emission, index) => ({
+      groupId: getProjectionAudienceGroupId(emission.audience, index),
+      kind: 'paragraph' as const,
+      text: emission.text,
+    }));
+    const firstText = blocks[0]?.text ?? '';
+
+    return {
+      id: `projection:${nextProjectionEmissionLogId++}`,
+      text: firstText,
+      scope: 'scope' in delivery ? delivery.scope : undefined,
+      lane: emissions[0]?.lane ?? 'recent',
+      blocks,
+    };
+  }
+
+  function matchesProjectionAudienceForViewer(
+    audience: RuntimeProjectionAudience,
+    viewerId: string | undefined,
+  ): boolean {
+    if (audience.kind === 'shared') {
+      return true;
+    }
+
+    if (!viewerId) {
+      return false;
+    }
+
+    if (audience.kind === 'actor') {
+      return audience.actorId === viewerId;
+    }
+
+    if (audience.kind === 'viewer') {
+      return audience.viewerId === viewerId;
+    }
+
+    if (audience.kind === 'witnesses') {
+      return audience.actorId !== viewerId;
+    }
+
+    return false;
+  }
+
+  function getProjectionAudienceGroupId(
+    audience: RuntimeProjectionAudience,
+    index: number,
+  ): string {
+    if (audience.kind === 'actor') {
+      return index === 0 ? 'actor' : 'actor-detail';
+    }
+
+    if (audience.kind === 'witnesses') {
+      return index === 0 ? 'witnesses' : 'witnesses-detail';
+    }
+
+    return audience.kind;
+  }
+
+  function getActivePlayerId(sessionState: RuntimeSessionState | undefined): string | undefined {
+    const playerValue = sessionState?.player;
+
+    if (!playerValue || Array.isArray(playerValue) || typeof playerValue !== 'object') {
+      return undefined;
+    }
+
+    const activeValue = (playerValue as Record<string, unknown>).active;
+
+    if (!activeValue || Array.isArray(activeValue) || typeof activeValue !== 'object') {
+      return undefined;
+    }
+
+    return typeof (activeValue as Record<string, unknown>).id === 'string'
+      ? (activeValue as Record<string, string>).id
+      : undefined;
   }
 
   async function runProjectOperation<TResult>(
@@ -948,6 +1156,7 @@ export function createRuntimeApiService(
       initialSessionStateByProjectId: persistedWorldState?.sessionState
         ? { [projectId]: persistedWorldState.sessionState }
         : undefined,
+      sessionIdFactory: () => `session_${nextRuntimeSessionId++}`,
     });
     projectMetadata = runtimeSessionService.getProjectMetadata(projectId);
     return runtimeSessionService;
@@ -1008,8 +1217,8 @@ export function createRuntimeApiService(
         route: sessionView.snapshot.route,
         areaVisitCounts: sessionView.snapshot.areaVisitCounts,
         pathVisitCounts: sessionView.snapshot.pathVisitCounts,
-        recentLogByNodeId: sessionView.snapshot.recentLogByNodeId,
-        actionAttemptsByNodeId: sessionView.snapshot.actionAttemptsByNodeId,
+        recentLogByNodeId: buildPersistedContinueRecentLogByNodeId(sessionView.snapshot.recentLogByNodeId),
+        actionAttemptsByNodeId: buildPersistedContinueActionAttemptsByNodeId(sessionView.snapshot.actionAttemptsByNodeId),
         sessionState: persistedContinueSessionState,
         savedAt: savedAtMs,
       });
@@ -1205,6 +1414,7 @@ export function createRuntimeApiService(
       pathVisitCounts: sessionView.snapshot.pathVisitCounts,
       recentLogByNodeId: nextRecentLogByNodeId,
       actionAttemptsByNodeId: sessionView.snapshot.actionAttemptsByNodeId,
+      fixtureInteractionStateById: sessionView.snapshot.fixtureInteractionStateById,
       sessionState: nextSessionState,
     }, {
       reevaluateCurrentNodeEntry: true,
@@ -1723,6 +1933,18 @@ function buildPersistedContinueSessionState(
   return normalizeSessionStateForPersistedContinue(sessionState);
 }
 
+function buildPersistedContinueRecentLogByNodeId(
+  _recentLogByNodeId: RuntimeSessionSnapshot['recentLogByNodeId'],
+): RuntimeSessionSnapshot['recentLogByNodeId'] {
+  return {};
+}
+
+function buildPersistedContinueActionAttemptsByNodeId(
+  _actionAttemptsByNodeId: RuntimeSessionSnapshot['actionAttemptsByNodeId'],
+): RuntimeSessionSnapshot['actionAttemptsByNodeId'] {
+  return {};
+}
+
 function buildPersistedProjectWorldState(
   projectId: string,
   sessionState: RuntimeSessionState,
@@ -1837,19 +2059,52 @@ function decoratePrototypeHubLobbyAtmospherePage(
     return stripPrototypeHubLobbyAtmosphereProse(page);
   }
 
+  const atmosphereText = selectJukeboxLobbyAtmosphereText(song, currentTick);
+
   const nextProseBlocks = [
     ...page.proseBlocks.filter((block) => block.groupId !== 'runtime-jukebox-atmosphere'),
     {
       groupId: 'runtime-jukebox-atmosphere',
       kind: 'paragraph' as const,
-      text: selectJukeboxLobbyAtmosphereText(song, currentTick),
+      text: atmosphereText,
     },
   ];
 
   return {
     ...page,
     proseBlocks: nextProseBlocks,
+    recentLog: removeRenderedJukeboxAtmosphereEntry(page.recentLog, atmosphereText),
   };
+}
+
+function removeRenderedJukeboxAtmosphereEntry(
+  recentLog: Extract<RuntimeSessionView['page'], { kind: 'page' }>['recentLog'],
+  atmosphereText: string,
+): Extract<RuntimeSessionView['page'], { kind: 'page' }>['recentLog'] {
+  if (!recentLog || recentLog.length === 0) {
+    return recentLog;
+  }
+
+  const duplicateIndex = findLastIndex(
+    recentLog,
+    (entry) => entry.id.startsWith('jukebox:atmosphere:') && entry.text === atmosphereText,
+  );
+
+  if (duplicateIndex < 0) {
+    return recentLog;
+  }
+
+  return recentLog.filter((_, index) => index !== duplicateIndex);
+}
+
+function findLastIndex<T>(items: readonly T[], predicate: (item: T, index: number) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index], index)) {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 function stripPrototypeHubLobbyAtmosphereProse(

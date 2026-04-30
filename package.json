@@ -4,6 +4,8 @@
   "version": "0.0.0",
   "scripts": {
     "dev": "npm --prefix ./project-root/apps/web run dev --",
+    "dev:strict": "npm --prefix ./project-root/apps/web run dev -- --host 127.0.0.1 --port 5173 --strictPort",
+    "dev:reset": "node ./scripts/dev_reset.mjs",
     "build": "npm --prefix ./project-root/apps/web run build",
     "preview": "npm --prefix ./project-root/apps/web run preview",
     "test": "npm --prefix ./project-root/apps/web run test",

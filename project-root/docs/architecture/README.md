@@ -223,6 +223,17 @@ Use this when you want:
 - the main reasons the current implementation is a refactor target
 - a quick reference before changing queue, playback, focus, or atmosphere behavior
 
+### `AudienceAndFixtureContextsV1.md`
+
+Target architecture note for shared text, private text, and concurrent same-node fixture interaction.
+
+Use this when you want:
+
+- the intended boundary between shared fixture state and private interaction shells
+- the target audience model for shared, actor-only, and viewer-specific projection
+- Mermaid diagrams for concurrent fixture use and audience-aware text delivery
+- implementation direction for the fake perception system and non-clobber fixture interaction
+
 ### `DenoDeployPlan.md`
 
 Hosting and deployment planning for Deno Deploy.

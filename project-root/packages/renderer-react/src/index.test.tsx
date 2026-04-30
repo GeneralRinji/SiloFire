@@ -172,6 +172,84 @@ test('ProjectedPageView renders recent log entries inside the recent panel', () 
   assert.doesNotMatch(html, /No recent entries yet/);
 });
 
+test('ProjectedPageView renders fixture panels after the recent panel', () => {
+  const page: ProjectionResult = {
+    kind: 'page',
+    nodeId: 'prototype_hub_lobby',
+    nodeKind: 'area',
+    title: 'Prototype Hub Lobby',
+    proseBlocks: [],
+    recentLog: [
+      {
+        id: 'log-1',
+        text: 'The synth kicks in like it owns the room.',
+      },
+    ],
+    fixturePanels: [
+      {
+        id: 'jukebox-panel',
+        title: 'Jukebox Controls',
+        sections: [
+          {
+            id: 'selected',
+            blocks: [
+              {
+                text: 'Selected: **Take On Me** by a-ha.',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    actions: [],
+    controls: [],
+  };
+
+  const html = renderToStaticMarkup(<ProjectedPageView page={page} />);
+  const recentIndex = html.indexOf('Recent');
+  const fixtureIndex = html.indexOf('Jukebox Controls');
+
+  assert.notEqual(recentIndex, -1);
+  assert.notEqual(fixtureIndex, -1);
+  assert.equal(recentIndex < fixtureIndex, true);
+});
+
+test('ProjectedPageView makes long queue fixture sections scrollable', () => {
+  const page: ProjectionResult = {
+    kind: 'page',
+    nodeId: 'prototype_hub_lobby',
+    nodeKind: 'area',
+    title: 'Prototype Hub Lobby',
+    proseBlocks: [],
+    fixturePanels: [
+      {
+        id: 'jukebox-panel',
+        title: 'Jukebox Controls',
+        sections: [
+          {
+            id: 'queue',
+            title: 'Queue',
+            blocks: [
+              { text: '1. Song One.' },
+              { text: '2. Song Two.' },
+              { text: '3. Song Three.' },
+              { text: '4. Song Four.' },
+              { text: '5. Song Five.' },
+              { text: '6. Song Six.' },
+            ],
+          },
+        ],
+      },
+    ],
+    actions: [],
+    controls: [],
+  };
+
+  const html = renderToStaticMarkup(<ProjectedPageView page={page} />);
+
+  assert.match(html, /fixture-panel__blocks fixture-panel__blocks--scrollable/);
+});
+
 test('ProjectedPageView preserves inline markdown in event-style private recent log text', () => {
   const page: ProjectionResult = {
     kind: 'page',

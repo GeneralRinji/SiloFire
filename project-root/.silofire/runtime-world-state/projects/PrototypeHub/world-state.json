@@ -7,8 +7,6 @@
         "openedAtMs": 0
       },
       "prototypehub_lobby_jukebox": {
-        "browseIndex": 11,
-        "fakeCredits": 0,
         "currentTrack": "none",
         "currentTrackLabel": "",
         "currentTrackMode": "",
@@ -21,14 +19,14 @@
     },
     "world": {
       "time": {
-        "phase": "night",
+        "phase": "dusk",
         "cycle": [
           "day",
           "dusk",
           "night",
           "dawn"
         ],
-        "nowMs": 1777433431820,
+        "nowMs": 1777525506029,
         "source": "preview-local"
       }
     },
@@ -40,5 +38,5 @@
     },
     "npcs": {}
   },
-  "savedAt": 1777433431823
+  "savedAt": 1777525506031
 }

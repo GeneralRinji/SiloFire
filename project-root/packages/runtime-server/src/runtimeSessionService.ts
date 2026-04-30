@@ -4,13 +4,15 @@ import {
   getRuntimeClockSnapshotFromSessionState,
   type ContentRuntimeOptions,
   type RuntimeClockSnapshot,
+  type RuntimeFixtureInteractionStateById,
   type RuntimeInteractionOutcome,
   type RuntimeNodeLink,
+  type RuntimeProjectionEmission,
   type RuntimeSessionObject,
   type RuntimeSessionState,
   type RuntimeWeatherSnapshot,
 } from '../../runtime/src';
-import type { ProjectedAction, ProjectedControl, ProjectedLogEntry, ProjectionResult } from '../../projection/src';
+import type { ProjectedAction, ProjectedControl, ProjectedFixturePanel, ProjectedLogEntry, ProjectionResult } from '../../projection/src';
 import type { PathDirection, ProjectTimeSettingsDefinition, ProjectWeatherSettingsDefinition, TitleScreenSaveMode } from '../../schema/src';
 
 export interface RuntimeSessionRoute {
@@ -28,6 +30,7 @@ export interface RuntimeSessionSnapshot {
   pathVisitCounts: Record<string, number>;
   recentLogByNodeId: Record<string, ProjectedLogEntry[]>;
   actionAttemptsByNodeId: Record<string, Record<string, number>>;
+  fixtureInteractionStateById: RuntimeFixtureInteractionStateById;
   sessionState: RuntimeSessionState;
 }
 
@@ -61,6 +64,17 @@ export interface CreateRuntimeSessionOptions {
 
 export interface RuntimeSessionServiceOptions extends ContentRuntimeOptions {
   initialSessionStateByProjectId?: Record<string, RuntimeSessionState>;
+  sessionIdFactory?: () => string;
+}
+
+export interface RuntimeSessionProjectionEmissionBatch {
+  nodeId: string;
+  emissions: RuntimeProjectionEmission[];
+}
+
+export interface RuntimeSessionActionResult {
+  sessionView?: RuntimeSessionView;
+  projectionEmissionBatches: RuntimeSessionProjectionEmissionBatch[];
 }
 
 export interface RuntimeSessionService {
@@ -73,6 +87,7 @@ export interface RuntimeSessionService {
     snapshot: Omit<RuntimeSessionSnapshot, 'sessionId'>,
     options?: { reevaluateCurrentNodeEntry?: boolean },
   ): RuntimeSessionView | undefined;
+  applyActionDetailed(sessionId: string, action: ProjectedAction): RuntimeSessionActionResult | undefined;
   applyAction(sessionId: string, action: ProjectedAction): RuntimeSessionView | undefined;
   applyControl(sessionId: string, control: ProjectedControl): RuntimeSessionView | undefined;
   resetSession(sessionId: string, destinationNodeId?: string): RuntimeSessionView | undefined;
@@ -85,16 +100,21 @@ interface ResolvedNodeEntry {
   pathDirection?: PathDirection;
   sessionState: RuntimeSessionState;
   logEntries: ProjectedLogEntry[];
+  projectionEmissionBatches: RuntimeSessionProjectionEmissionBatch[];
 }
 
 export function createRuntimeSessionServiceForContentFiles(
   contentFiles: Record<string, string>,
   options: RuntimeSessionServiceOptions = {},
 ): RuntimeSessionService {
-  const { initialSessionStateByProjectId, ...runtimeOptions } = options;
+  const { initialSessionStateByProjectId, sessionIdFactory, ...runtimeOptions } = options;
   const contentRuntime = createContentRuntime(contentFiles, runtimeOptions);
   const sessions = new Map<string, MutableRuntimeSession>();
   let nextSessionId = 1;
+
+  function createSessionId(): string {
+    return sessionIdFactory?.() ?? `session_${nextSessionId++}`;
+  }
 
   function createSeededInitialProjectSessionState(projectId: string): RuntimeSessionState {
     const persistedState = initialSessionStateByProjectId?.[projectId];
@@ -111,7 +131,7 @@ export function createRuntimeSessionServiceForContentFiles(
         return undefined;
       }
 
-      const sessionId = `session_${nextSessionId++}`;
+      const sessionId = createSessionId();
       const session: MutableRuntimeSession = {
         sessionId,
         projectId,
@@ -125,6 +145,7 @@ export function createRuntimeSessionServiceForContentFiles(
         pathVisitCounts: {},
         recentLogByNodeId: {},
         actionAttemptsByNodeId: {},
+        fixtureInteractionStateById: {},
         sessionState: createSeededInitialProjectSessionState(projectId),
       };
 
@@ -146,7 +167,7 @@ export function createRuntimeSessionServiceForContentFiles(
         return undefined;
       }
 
-      const sessionId = `session_${nextSessionId++}`;
+      const sessionId = createSessionId();
       const session: MutableRuntimeSession = {
         sessionId,
         projectId,
@@ -163,6 +184,9 @@ export function createRuntimeSessionServiceForContentFiles(
         ),
         actionAttemptsByNodeId: Object.fromEntries(
           Object.entries(snapshot.actionAttemptsByNodeId).map(([nodeId, attempts]) => [nodeId, { ...attempts }]),
+        ),
+        fixtureInteractionStateById: Object.fromEntries(
+          Object.entries(snapshot.fixtureInteractionStateById ?? {}).map(([fixtureId, state]) => [fixtureId, { ...state }]),
         ),
         sessionState: syncActivePlayerLocation(snapshot.sessionState, snapshot.route.nodeId),
       };
@@ -216,6 +240,9 @@ export function createRuntimeSessionServiceForContentFiles(
       session.actionAttemptsByNodeId = Object.fromEntries(
         Object.entries(snapshot.actionAttemptsByNodeId).map(([nodeId, attempts]) => [nodeId, { ...attempts }]),
       );
+      session.fixtureInteractionStateById = Object.fromEntries(
+        Object.entries(snapshot.fixtureInteractionStateById ?? {}).map(([fixtureId, state]) => [fixtureId, { ...state }]),
+      );
       session.sessionState = syncActivePlayerLocation(snapshot.sessionState, snapshot.route.nodeId);
 
       if (options.reevaluateCurrentNodeEntry) {
@@ -225,6 +252,9 @@ export function createRuntimeSessionServiceForContentFiles(
       return buildSessionView(session);
     },
     applyAction(sessionId, action) {
+      return service.applyActionDetailed(sessionId, action)?.sessionView;
+    },
+    applyActionDetailed(sessionId, action) {
       const session = sessions.get(sessionId);
 
       if (!session) {
@@ -287,6 +317,7 @@ export function createRuntimeSessionServiceForContentFiles(
       session.pathVisitCounts = {};
       session.recentLogByNodeId = {};
       session.actionAttemptsByNodeId = {};
+      session.fixtureInteractionStateById = {};
       session.sessionState = createSeededInitialProjectSessionState(session.projectId);
       session.route = {
         nodeId: undefined,
@@ -309,29 +340,41 @@ export function createRuntimeSessionServiceForContentFiles(
 
   return service;
 
-  function applyActionToSession(session: MutableRuntimeSession, action: ProjectedAction): RuntimeSessionView | undefined {
+  function applyActionToSession(session: MutableRuntimeSession, action: ProjectedAction): RuntimeSessionActionResult | undefined {
     if (!session.route.nodeId) {
       return undefined;
     }
 
     const nodeId = session.route.nodeId;
+    const projectionEmissionBatches: RuntimeSessionProjectionEmissionBatch[] = [];
     session.sessionState = contentRuntime.hydrateProjectSessionState(session.projectId, nodeId, session.sessionState) ?? session.sessionState;
     const attempt = getNextActionAttempt(session, nodeId, action);
     const actorId = getActivePlayerId(session.sessionState);
     const outcome = contentRuntime.resolveProjectAction(session.projectId, nodeId, action, {
       attempt,
       sessionState: session.sessionState,
+      fixtureInteractionStateById: session.fixtureInteractionStateById,
       actorId,
       viewerId: actorId,
     });
 
+    if (outcome.projectionEmissions && outcome.projectionEmissions.length > 0) {
+      projectionEmissionBatches.push({
+        nodeId,
+        emissions: outcome.projectionEmissions,
+      });
+    }
+
     if (outcome.resetNodeId) {
-      return service.resetSession(session.sessionId, outcome.resetNodeId);
+      return {
+        sessionView: service.resetSession(session.sessionId, outcome.resetNodeId),
+        projectionEmissionBatches,
+      };
     }
 
     if (outcome.nextNodeId) {
       const carriedLogEntry = action.kind === 'exit' && outcome.eventResult ? outcome.logEntry : undefined;
-      transitionToNode(
+      const resolvedEntryOutcome = transitionToNode(
         session,
         outcome.nextNodeId,
         outcome.nextPathDirection,
@@ -339,7 +382,15 @@ export function createRuntimeSessionServiceForContentFiles(
         outcome.sessionState,
         carriedLogEntry,
       );
-      return buildSessionView(session);
+
+      if (resolvedEntryOutcome) {
+        projectionEmissionBatches.push(...resolvedEntryOutcome.projectionEmissionBatches);
+      }
+
+      return {
+        sessionView: buildSessionView(session),
+        projectionEmissionBatches,
+      };
     }
 
     appendNodeLog(session, nodeId, outcome.logEntry, outcome.replaceNodeLogScope, outcome.clearNodeRecentLog);
@@ -348,7 +399,14 @@ export function createRuntimeSessionServiceForContentFiles(
       session.sessionState = outcome.sessionState;
     }
 
-    return buildSessionView(session);
+    if (outcome.fixtureInteractionStateById) {
+      session.fixtureInteractionStateById = outcome.fixtureInteractionStateById;
+    }
+
+    return {
+      sessionView: buildSessionView(session),
+      projectionEmissionBatches,
+    };
   }
 
   function selectFreshStartAction(page: ProjectionResult | undefined): ProjectedAction | undefined {
@@ -376,17 +434,25 @@ export function createRuntimeSessionServiceForContentFiles(
       sessionState: session.sessionState,
     });
     appendAutomaticJukeboxQueueAdvanceLog(session, basePage, previousSessionState);
-    const page = appendRecentLog(
+    const pageWithRecentLog = appendRecentLog(
       basePage,
       nodeId ? session.recentLogByNodeId[nodeId] : undefined,
     );
     const actorId = getActivePlayerId(session.sessionState);
+    const fixturePanels = contentRuntime.getProjectedFixturePanels(session.projectId, nodeId, {
+      sessionState: session.sessionState,
+      fixtureInteractionStateById: session.fixtureInteractionStateById,
+      actorId,
+      viewerId: actorId,
+    });
+    const page = appendFixturePanels(pageWithRecentLog, fixturePanels);
 
     return {
       snapshot: cloneSessionSnapshot(session),
       page,
       offeredActions: contentRuntime.getOfferedActions(session.projectId, nodeId, {
         sessionState: session.sessionState,
+        fixtureInteractionStateById: session.fixtureInteractionStateById,
         actorId,
         viewerId: actorId,
       }),
@@ -433,7 +499,7 @@ export function createRuntimeSessionServiceForContentFiles(
     nextPathBeatIndex?: number,
     nextSessionState?: RuntimeSessionState,
     carriedLogEntry?: ProjectedLogEntry,
-  ): void {
+  ): ResolvedNodeEntry | undefined {
     const currentNodeId = session.route.nodeId;
     const currentPathDirection = session.route.pathDirection;
     const isNewNodeVisit = currentNodeId !== nextNodeId || currentPathDirection !== nextPathDirection;
@@ -481,6 +547,8 @@ export function createRuntimeSessionServiceForContentFiles(
 
       incrementNodeVisitCount(session, nextNodeId);
     }
+
+    return resolvedEntryOutcome;
   }
 
   function resolvePendingNodeEntry(
@@ -496,6 +564,7 @@ export function createRuntimeSessionServiceForContentFiles(
         pathDirection,
         sessionState,
         logEntries: carriedLogEntries,
+        projectionEmissionBatches: [],
       };
     }
 
@@ -504,6 +573,7 @@ export function createRuntimeSessionServiceForContentFiles(
     let activePathDirection = pathDirection;
     let activeSessionState = syncActivePlayerLocation(sessionState, activeNodeId);
     const logEntries = [...carriedLogEntries];
+    const projectionEmissionBatches: RuntimeSessionProjectionEmissionBatch[] = [];
 
     while (activeNodeId) {
       const visitKey = `${activeNodeId}:${activePathDirection ?? ''}`;
@@ -527,6 +597,13 @@ export function createRuntimeSessionServiceForContentFiles(
         logEntries.push(outcome.logEntry);
       }
 
+      if (activeNodeId && outcome.projectionEmissions && outcome.projectionEmissions.length > 0) {
+        projectionEmissionBatches.push({
+          nodeId: activeNodeId,
+          emissions: outcome.projectionEmissions,
+        });
+      }
+
       if (!outcome.nextNodeId) {
         break;
       }
@@ -541,6 +618,7 @@ export function createRuntimeSessionServiceForContentFiles(
       pathDirection: activePathDirection,
       sessionState: activeSessionState,
       logEntries,
+      projectionEmissionBatches,
     };
   }
 
@@ -603,6 +681,20 @@ function appendNodeLog(
   session.recentLogByNodeId[nodeId] = [...nextEntries, entry];
 }
 
+function appendFixturePanels(
+  page: ProjectionResult | undefined,
+  fixturePanels: ProjectedFixturePanel[],
+): ProjectionResult | undefined {
+  if (!page || page.kind !== 'page' || fixturePanels.length === 0) {
+    return page;
+  }
+
+  return {
+    ...page,
+    fixturePanels,
+  };
+}
+
 function cloneSessionSnapshot(session: MutableRuntimeSession): RuntimeSessionSnapshot {
   return {
     sessionId: session.sessionId,
@@ -615,6 +707,9 @@ function cloneSessionSnapshot(session: MutableRuntimeSession): RuntimeSessionSna
     ),
     actionAttemptsByNodeId: Object.fromEntries(
       Object.entries(session.actionAttemptsByNodeId).map(([nodeId, attempts]) => [nodeId, { ...attempts }]),
+    ),
+    fixtureInteractionStateById: Object.fromEntries(
+      Object.entries(session.fixtureInteractionStateById).map(([fixtureId, state]) => [fixtureId, { ...state }]),
     ),
     sessionState: session.sessionState,
   };
@@ -736,11 +831,24 @@ export function normalizeSessionStateForPersistedWorldState(
     Object.entries(objectsState).map(([objectId, objectState]) => {
       const runtimeObjectState = asRuntimeRecord(objectState);
 
-      if (!runtimeObjectState || !Object.prototype.hasOwnProperty.call(runtimeObjectState, 'focused')) {
+      if (!runtimeObjectState) {
         return [objectId, objectState];
       }
 
-      const { focused: _focused, ...nextObjectState } = runtimeObjectState;
+      const hasPrivateFixtureFields = Object.prototype.hasOwnProperty.call(runtimeObjectState, 'focused')
+        || Object.prototype.hasOwnProperty.call(runtimeObjectState, 'browseIndex')
+        || Object.prototype.hasOwnProperty.call(runtimeObjectState, 'fakeCredits');
+
+      if (!hasPrivateFixtureFields) {
+        return [objectId, objectState];
+      }
+
+      const {
+        focused: _focused,
+        browseIndex: _browseIndex,
+        fakeCredits: _fakeCredits,
+        ...nextObjectState
+      } = runtimeObjectState;
       changed = true;
       return [objectId, nextObjectState];
     }),
@@ -779,7 +887,6 @@ function appendAutomaticJukeboxQueueAdvanceLog(
     const previousTrackId = getRuntimeStringField(previousJukeboxState, 'currentTrack');
     const nextTrackId = getRuntimeStringField(nextJukeboxState, 'currentTrack');
     const previousTrackEndsAtMs = getRuntimeNumberField(previousJukeboxState, 'currentTrackEndsAtMs');
-    const existingQueueLogEntry = findJukeboxQueueLogEntry(session.recentLogByNodeId[page.nodeId]);
 
     if (!previousTrackId) {
       continue;
@@ -790,18 +897,7 @@ function appendAutomaticJukeboxQueueAdvanceLog(
     }
 
     if (!nextTrackId) {
-      if (existingQueueLogEntry) {
-        session.recentLogByNodeId[page.nodeId] = [
-          createUpdatedJukeboxQueueLogEntry(existingQueueLogEntry, {
-            queuedTrackCount: getRuntimeStringArrayField(nextJukeboxState, 'queueTrackIds').length,
-          }),
-        ];
-        return;
-      }
-
-      session.recentLogByNodeId[page.nodeId] = [
-        createAutomaticJukeboxQueueFinishedLogEntry(action.label),
-      ];
+      appendNodeLog(session, page.nodeId, createAutomaticJukeboxQueueFinishedLogEntry(action.label));
       return;
     }
 
@@ -809,22 +905,7 @@ function appendAutomaticJukeboxQueueAdvanceLog(
       continue;
     }
 
-    if (existingQueueLogEntry) {
-      session.recentLogByNodeId[page.nodeId] = [
-        createUpdatedJukeboxQueueLogEntry(existingQueueLogEntry, {
-          trackLabel: getRuntimeStringField(nextJukeboxState, 'currentTrackLabel'),
-          trackMode: getRuntimeStringField(nextJukeboxState, 'currentTrackMode'),
-          currentTrackEndsAtMs: getRuntimeNumberField(nextJukeboxState, 'currentTrackEndsAtMs'),
-          currentNowMs,
-          queuedTrackCount: getRuntimeStringArrayField(nextJukeboxState, 'queueTrackIds').length,
-        }),
-      ];
-      return;
-    }
-
-    session.recentLogByNodeId[page.nodeId] = [
-      createAutomaticJukeboxQueueAdvanceLogEntry(action.label, getRuntimeStringField(nextJukeboxState, 'currentTrackLabel')),
-    ];
+    appendNodeLog(session, page.nodeId, createAutomaticJukeboxQueueAdvanceLogEntry(action.label, getRuntimeStringField(nextJukeboxState, 'currentTrackLabel')));
     return;
   }
 }
@@ -845,82 +926,6 @@ function createAutomaticJukeboxQueueFinishedLogEntry(
   return {
     text: `${fixtureLabel.trim().toLowerCase()} finishes the last queued song and falls quiet.`,
     lane: 'recent',
-  };
-}
-
-function findJukeboxQueueLogEntry(
-  entries: ProjectedLogEntry[] | undefined,
-): ProjectedLogEntry | undefined {
-  return [...(entries ?? [])].reverse().find((entry) => isJukeboxQueueLogEntry(entry));
-}
-
-function isJukeboxQueueLogEntry(entry: ProjectedLogEntry | undefined): boolean {
-  return Boolean(entry?.blocks?.some((block) => block.groupId === 'jukebox-queue'));
-}
-
-function createUpdatedJukeboxQueueLogEntry(
-  entry: ProjectedLogEntry,
-  options: {
-    trackLabel?: string;
-    trackMode?: string;
-    currentTrackEndsAtMs?: number;
-    currentNowMs?: number;
-    queuedTrackCount: number;
-  },
-): ProjectedLogEntry {
-  const blocks = entry.blocks ?? [];
-  const selectedBlock = blocks[0] ?? {
-    groupId: 'jukebox-queue',
-    kind: 'paragraph' as const,
-    text: entry.text,
-  };
-  const fakeCreditsBlock = [...blocks].reverse().find((block) => block.text.startsWith('Fake credits ready:')) ?? {
-    groupId: 'jukebox-queue',
-    kind: 'paragraph' as const,
-    text: 'Fake credits ready: $0.00.',
-  };
-  const numberedQueueBlocks = blocks.filter((block) => /^\d+\. /.test(block.text));
-  const remainingQueueBlocks = numberedQueueBlocks
-    .slice(Math.max(0, numberedQueueBlocks.length - options.queuedTrackCount))
-    .map((block, index) => ({
-      ...block,
-      text: block.text.replace(/^\d+\./, `${index + 1}.`),
-    }));
-  const currentTrackTimeLeftSeconds = typeof options.currentTrackEndsAtMs === 'number' && typeof options.currentNowMs === 'number'
-    ? Math.max(0, Math.ceil((options.currentTrackEndsAtMs - options.currentNowMs) / 1000))
-    : undefined;
-  const nextBlocks = [
-    selectedBlock,
-    {
-      groupId: 'jukebox-queue',
-      kind: 'paragraph' as const,
-      text: options.trackLabel
-        ? `Now Playing: ${formatPersistedJukeboxTrackLabel(options.trackLabel)}. ${options.trackMode === 'autoplay' ? 'Mode: motion-sensing autoplay.' : 'Mode: paid selection.'}${typeof currentTrackTimeLeftSeconds === 'number' ? ` Time left: ${formatRuntimeDurationText(currentTrackTimeLeftSeconds)}.` : ''}`
-        : 'Now Playing: nothing yet.',
-    },
-    ...(remainingQueueBlocks.length > 0
-      ? [
-          {
-            groupId: 'jukebox-queue',
-            kind: 'paragraph' as const,
-            text: 'Queue:',
-          },
-          ...remainingQueueBlocks,
-        ]
-      : [
-          {
-            groupId: 'jukebox-queue',
-            kind: 'paragraph' as const,
-            text: 'Queue: empty right now.',
-          },
-        ]),
-    fakeCreditsBlock,
-  ];
-
-  return {
-    ...entry,
-    text: selectedBlock.text,
-    blocks: nextBlocks,
   };
 }
 

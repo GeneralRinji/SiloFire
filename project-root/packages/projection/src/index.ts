@@ -32,6 +32,19 @@ export interface ProjectedLogEntry {
   blocks?: ProjectedProseBlock[];
 }
 
+export interface ProjectedFixturePanelSection {
+  id: string;
+  title?: string;
+  blocks: ProjectedProseBlock[];
+}
+
+export interface ProjectedFixturePanel {
+  id: string;
+  title: string;
+  subtitle?: string;
+  sections: ProjectedFixturePanelSection[];
+}
+
 export interface ProjectedAction {
   id: string;
   kind: 'exit' | 'choice' | 'poi' | 'gate_action';
@@ -67,6 +80,7 @@ export interface ProjectedPage {
   gateNavigationLabels?: ProjectedAreaNavigationLabels;
   proseBlocks: ProjectedProseBlock[];
   recentLog?: ProjectedLogEntry[];
+  fixturePanels?: ProjectedFixturePanel[];
   actions: ProjectedAction[];
   controls: ProjectedControl[];
 }

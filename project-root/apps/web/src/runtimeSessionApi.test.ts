@@ -89,6 +89,7 @@ test('server runtime session source subscribes to the session stream and closes 
       pathVisitCounts: {},
       recentLogByNodeId: {},
       actionAttemptsByNodeId: {},
+      fixtureInteractionStateById: {},
       sessionState: {},
     },
     offeredActions: [],

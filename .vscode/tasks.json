@@ -7,7 +7,7 @@
 			"command": "npm",
 			"args": [
 				"run",
-				"dev"
+				"dev:reset"
 			],
 			"isBackground": true,
 			"problemMatcher": {
@@ -18,7 +18,7 @@
 				"background": {
 					"activeOnStart": true,
 					"beginsPattern": ".*vite.*",
-					"endsPattern": ".*(Local|local):\\s+http://localhost:5173/.*"
+					"endsPattern": ".*(Local|local):\\s+http://(localhost|127\\.0\\.0\\.1):5173/.*"
 				}
 			},
 			"group": "build"

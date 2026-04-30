@@ -2,7 +2,7 @@ import type { ProjectedAction, ProjectedControl, ProjectedLogEntry, ProjectionRe
 import type { RuntimeClockSnapshot, RuntimeNodeLink, RuntimeWeatherSnapshot } from '../../../packages/runtime/src';
 import type { PathDirection } from '../../../packages/schema/src';
 import type { ProjectTimeSettingsDefinition, ProjectWeatherSettingsDefinition, TitleScreenSaveMode } from '../../../packages/schema/src';
-import type { RuntimeSessionState } from './contentRuntimeCore';
+import type { RuntimeFixtureInteractionStateById, RuntimeSessionState } from './contentRuntimeCore';
 
 export interface RuntimeSessionRoute {
   nodeId?: string;
@@ -19,6 +19,7 @@ export interface RuntimeSessionSnapshot {
   pathVisitCounts: Record<string, number>;
   recentLogByNodeId: Record<string, ProjectedLogEntry[]>;
   actionAttemptsByNodeId: Record<string, Record<string, number>>;
+  fixtureInteractionStateById: RuntimeFixtureInteractionStateById;
   sessionState: RuntimeSessionState;
 }
 
@@ -50,6 +51,7 @@ export interface RuntimeSessionRestoreSnapshot {
   pathVisitCounts: Record<string, number>;
   recentLogByNodeId: Record<string, ProjectedLogEntry[]>;
   actionAttemptsByNodeId: Record<string, Record<string, number>>;
+  fixtureInteractionStateById: RuntimeFixtureInteractionStateById;
   sessionState: RuntimeSessionState;
 }
 

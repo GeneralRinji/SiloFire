@@ -1,0 +1,13 @@
+{
+  "projectId": "demo02",
+  "sessionState": {
+    "player": {
+      "location": "title_screen",
+      "active": {
+        "location": "title_screen"
+      }
+    },
+    "npcs": {}
+  },
+  "savedAt": 1777515691937
+}
